@@ -3,16 +3,19 @@ import sqlite3
 import requests
 import json
 import os
+from datetime import date
 
 app = Flask(__name__)
 
-DATA_DIR = '/data'
-DB_PATH = os.path.join(DATA_DIR, 'flyertracker.db')
-CACHE_PATH = os.path.join(DATA_DIR, 'streets_cache.json')
+DATA_DIR    = '/data'
+DB_PATH     = os.path.join(DATA_DIR, 'flyertracker.db')
+CACHE_PATH  = os.path.join(DATA_DIR, 'streets_cache.json')
 
-# Bounding box: Venlo + Tegelen
-# Pas dit aan als je een ander gebied wil
-BBOX = "51.33,6.10,51.42,6.22"
+DEFAULT_BBOX   = "51.33,6.10,51.42,6.22"
+DEFAULT_CENTER = [51.370, 6.168]
+DEFAULT_ZOOM   = 14
+
+HEADERS = {'User-Agent': 'HogedrukVenlo/1.0 (flyertracker)'}
 
 # ---------------------------------------------------------------------------
 # Database
@@ -26,358 +29,604 @@ def get_db():
 def init_db():
     os.makedirs(DATA_DIR, exist_ok=True)
     conn = get_db()
-    conn.execute('''
+    conn.executescript('''
         CREATE TABLE IF NOT EXISTS streets (
-            osm_id      TEXT PRIMARY KEY,
-            name        TEXT,
-            status      TEXT DEFAULT 'none',
-            updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-            notes       TEXT DEFAULT ''
-        )
+            osm_id     TEXT PRIMARY KEY,
+            name       TEXT,
+            status     TEXT DEFAULT 'none',
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS manual_streets (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            name       TEXT NOT NULL,
+            house_from INTEGER,
+            house_to   INTEGER,
+            status     TEXT DEFAULT 'planned',
+            date_done  DATE,
+            notes      TEXT DEFAULT '',
+            geometry   TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS settings (
+            key   TEXT PRIMARY KEY,
+            value TEXT
+        );
     ''')
+    for k, v in [('bbox', DEFAULT_BBOX),
+                 ('center_lat', str(DEFAULT_CENTER[0])),
+                 ('center_lng', str(DEFAULT_CENTER[1])),
+                 ('zoom', str(DEFAULT_ZOOM))]:
+        conn.execute('INSERT OR IGNORE INTO settings (key,value) VALUES (?,?)', (k, v))
+    conn.commit()
+    conn.close()
+
+def get_setting(key, default=None):
+    conn = get_db()
+    row = conn.execute('SELECT value FROM settings WHERE key=?', (key,)).fetchone()
+    conn.close()
+    return row['value'] if row else default
+
+def set_setting(key, value):
+    conn = get_db()
+    conn.execute('INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)', (key, str(value)))
     conn.commit()
     conn.close()
 
 # ---------------------------------------------------------------------------
-# Straten ophalen via Overpass API
+# OSM / Overpass
 # ---------------------------------------------------------------------------
 
-def fetch_from_overpass():
+def fetch_from_overpass(bbox):
     query = f"""
-    [out:json][timeout:90];
-    (
-      way["highway"]["name"]({BBOX});
-    );
-    out geom;
-    """
-    resp = requests.post(
-        'https://overpass-api.de/api/interpreter',
-        data=query,
-        timeout=120
-    )
-    resp.raise_for_status()
-    return resp.json()
+[out:json][timeout:90];
+(
+  way["highway"]["name"]({bbox});
+);
+out geom;
+"""
+    r = requests.post('https://overpass-api.de/api/interpreter',
+                      data=query, timeout=120, headers=HEADERS)
+    r.raise_for_status()
+    return r.json()
+
+def overpass_to_geojson(data):
+    features = []
+    for el in data.get('elements', []):
+        if el['type'] != 'way' or 'geometry' not in el:
+            continue
+        hw = el.get('tags', {}).get('highway', '')
+        if hw in ('motorway', 'motorway_link', 'trunk', 'trunk_link'):
+            continue
+        coords = [[pt['lon'], pt['lat']] for pt in el['geometry']]
+        features.append({
+            'type': 'Feature',
+            'id': str(el['id']),
+            'properties': {
+                'name': el.get('tags', {}).get('name', 'Onbekend'),
+                'highway': hw,
+            },
+            'geometry': {'type': 'LineString', 'coordinates': coords}
+        })
+    return {'type': 'FeatureCollection', 'features': features}
 
 def get_streets_geojson():
-    # Geef cache terug als die bestaat
     if os.path.exists(CACHE_PATH):
         with open(CACHE_PATH) as f:
             return json.load(f)
-
-    # Haal op van Overpass
-    data = fetch_from_overpass()
-
-    features = []
-    for element in data.get('elements', []):
-        if element['type'] != 'way' or 'geometry' not in element:
-            continue
-
-        # Filter op relevante wegtypes (geen snelwegen etc.)
-        highway = element.get('tags', {}).get('highway', '')
-        if highway in ('motorway', 'motorway_link', 'trunk', 'trunk_link'):
-            continue
-
-        coords = [[pt['lon'], pt['lat']] for pt in element['geometry']]
-        features.append({
-            'type': 'Feature',
-            'id': str(element['id']),
-            'properties': {
-                'name': element.get('tags', {}).get('name', 'Onbekend'),
-                'highway': highway,
-            },
-            'geometry': {
-                'type': 'LineString',
-                'coordinates': coords
-            }
-        })
-
-    geojson = {'type': 'FeatureCollection', 'features': features}
-
+    bbox = get_setting('bbox', DEFAULT_BBOX)
+    data = fetch_from_overpass(bbox)
+    gj   = overpass_to_geojson(data)
     with open(CACHE_PATH, 'w') as f:
-        json.dump(geojson, f)
+        json.dump(gj, f)
+    return gj
 
-    return geojson
+def find_street_in_cache(name):
+    """Return the first matching GeoJSON feature from the cache by street name."""
+    if not os.path.exists(CACHE_PATH):
+        return None
+    with open(CACHE_PATH) as f:
+        gj = json.load(f)
+    name_lower = name.lower()
+    for feat in gj.get('features', []):
+        if feat['properties'].get('name', '').lower() == name_lower:
+            return feat['geometry']
+    return None
 
 # ---------------------------------------------------------------------------
-# HTML template
+# HTML
 # ---------------------------------------------------------------------------
 
-HTML = """
-<!DOCTYPE html>
+HTML = r"""<!DOCTYPE html>
 <html lang="nl">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-    <title>Flyer Tracker – Hogedruk Venlo</title>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Flyer Tracker – Hogedruk Venlo</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:flex;flex-direction:column;height:100vh;height:100dvh;background:#f4f4f4;overflow:hidden}
 
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            display: flex;
-            flex-direction: column;
-            height: 100vh;
-            background: #f0f0f0;
-        }
+/* Header */
+#hdr{background:#1565c0;color:#fff;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;z-index:100}
+#hdr h1{font-size:14px;font-weight:700}
 
-        /* Header */
-        #header {
-            background: #1565c0;
-            color: white;
-            padding: 10px 16px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            flex-shrink: 0;
-            gap: 8px;
-        }
-        #header h1 { font-size: 15px; font-weight: 700; }
-        #stats { font-size: 12px; opacity: 0.85; white-space: nowrap; }
+/* Content */
+#content{flex:1;overflow:hidden;position:relative}
+.tab{display:none;height:100%;flex-direction:column}
+.tab.on{display:flex}
 
-        /* Map */
-        #map { flex: 1; z-index: 1; }
+/* Bottom nav */
+#nav{display:flex;background:#fff;border-top:1px solid #e0e0e0;flex-shrink:0}
+.nb{flex:1;padding:9px 4px 7px;border:none;background:none;cursor:pointer;font-size:10px;color:#999;display:flex;flex-direction:column;align-items:center;gap:3px}
+.nb .ic{font-size:21px;line-height:1}
+.nb.on{color:#1565c0}
 
-        /* Legenda */
-        #legend {
-            position: fixed;
-            bottom: 20px;
-            right: 10px;
-            background: white;
-            border-radius: 10px;
-            padding: 10px 14px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.25);
-            z-index: 1000;
-            font-size: 12px;
-            line-height: 1.8;
-        }
-        #legend div { display: flex; align-items: center; gap: 8px; }
-        .leg-line {
-            width: 20px; height: 4px; border-radius: 2px; flex-shrink: 0;
-        }
+/* Search bar (map tab) */
+#mapsearch{padding:9px 10px;background:#fff;border-bottom:1px solid #e5e5e5;display:flex;gap:8px;flex-shrink:0}
+#area-in{flex:1;padding:8px 11px;border:1px solid #ddd;border-radius:8px;font-size:14px;outline:none}
+#area-in:focus{border-color:#1565c0}
+.btnp{padding:8px 14px;background:#1565c0;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap}
+.btnp:active{filter:brightness(.88)}
 
-        /* Loading overlay */
-        #loading {
-            position: fixed;
-            inset: 0;
-            background: rgba(255,255,255,0.92);
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            z-index: 3000;
-        }
-        #loading p { margin-top: 14px; font-size: 14px; color: #444; }
-        #loading small { margin-top: 6px; font-size: 12px; color: #888; }
-        .spinner {
-            width: 40px; height: 40px;
-            border: 4px solid #e0e0e0;
-            border-top-color: #1565c0;
-            border-radius: 50%;
-            animation: spin 0.75s linear infinite;
-        }
-        @keyframes spin { to { transform: rotate(360deg); } }
+/* Map */
+#map{flex:1}
 
-        /* Popup panel */
-        #popup {
-            position: fixed;
-            bottom: 0;
-            left: 0; right: 0;
-            background: white;
-            border-radius: 16px 16px 0 0;
-            padding: 18px 20px 28px;
-            box-shadow: 0 -4px 20px rgba(0,0,0,0.15);
-            z-index: 2000;
-            display: none;
-            transition: transform 0.2s ease;
-        }
-        #popup-name {
-            font-size: 17px;
-            font-weight: 700;
-            margin-bottom: 6px;
-            color: #111;
-        }
-        #popup-current {
-            font-size: 13px;
-            color: #666;
-            margin-bottom: 16px;
-        }
-        .btn-row {
-            display: flex;
-            gap: 10px;
-        }
-        .btn {
-            flex: 1;
-            padding: 12px 8px;
-            border: none;
-            border-radius: 10px;
-            font-size: 13px;
-            font-weight: 700;
-            cursor: pointer;
-            letter-spacing: 0.2px;
-        }
-        .btn-planned { background: #f59e0b; color: white; }
-        .btn-done    { background: #16a34a; color: white; }
-        .btn-none    { background: #e5e7eb; color: #555; }
-        .btn:active  { filter: brightness(0.9); }
+/* GPS button */
+#gpsbtn{position:fixed;bottom:76px;left:10px;width:42px;height:42px;background:#fff;border:2px solid #ccc;border-radius:50%;font-size:19px;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.2);z-index:1000}
+#gpsbtn.on{border-color:#1565c0}
 
-        #close-popup {
-            position: absolute;
-            top: 14px; right: 18px;
-            font-size: 22px;
-            color: #aaa;
-            cursor: pointer;
-            line-height: 1;
-        }
-    </style>
+/* Legend */
+#legend{position:fixed;bottom:70px;right:8px;background:#fff;border-radius:9px;padding:7px 11px;box-shadow:0 2px 10px rgba(0,0,0,.18);z-index:1000;font-size:11px;line-height:1.9}
+#legend div{display:flex;align-items:center;gap:7px}
+.ll{width:17px;height:3px;border-radius:2px;flex-shrink:0}
+
+/* Street popup */
+#popup{position:fixed;bottom:0;left:0;right:0;background:#fff;border-radius:16px 16px 0 0;padding:17px 18px 28px;box-shadow:0 -4px 20px rgba(0,0,0,.15);z-index:2000;display:none}
+#popup-name{font-size:16px;font-weight:700;margin-bottom:3px}
+#popup-cur{font-size:12px;color:#888;margin-bottom:14px}
+#xpop{position:absolute;top:13px;right:16px;font-size:21px;color:#bbb;cursor:pointer}
+.brow{display:flex;gap:8px}
+.btn{flex:1;padding:11px 6px;border:none;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer}
+.btn:active{filter:brightness(.88)}
+.bpl{background:#f59e0b;color:#fff}
+.bdo{background:#16a34a;color:#fff}
+.bno{background:#e5e7eb;color:#555}
+
+/* Loading */
+#loading{position:fixed;inset:0;background:rgba(255,255,255,.93);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:5000}
+#loading p{margin-top:13px;font-size:14px;color:#444}
+#loading small{margin-top:5px;font-size:12px;color:#aaa}
+.spin{width:38px;height:38px;border:4px solid #e5e5e5;border-top-color:#1565c0;border-radius:50%;animation:sp .75s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+
+/* Tab 2 – Straten */
+#streets-scroll{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:10px}
+.card{background:#fff;border-radius:12px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.07)}
+.card h3{font-size:13px;font-weight:700;color:#333;margin-bottom:11px}
+.frow{display:flex;gap:8px;margin-bottom:9px}
+.fcol{display:flex;flex-direction:column;gap:3px;flex:1}
+.fcol label{font-size:10px;color:#aaa;font-weight:600;letter-spacing:.3px}
+.fcol input,.fcol select{padding:8px 10px;border:1px solid #e0e0e0;border-radius:8px;font-size:14px;outline:none;width:100%;background:#fff}
+.fcol input:focus,.fcol select:focus{border-color:#1565c0}
+.si{border:1px solid #f0f0f0;border-radius:10px;padding:11px;margin-bottom:7px;display:flex;align-items:flex-start;gap:8px}
+.si:last-child{margin-bottom:0}
+.sinfo{flex:1}
+.sname{font-weight:700;font-size:14px;color:#222}
+.smeta{font-size:11px;color:#999;margin-top:2px}
+.sbadge{padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;flex-shrink:0;white-space:nowrap}
+.bpl2{background:#fef3c7;color:#92400e}
+.bdo2{background:#dcfce7;color:#166534}
+.delbtn{background:none;border:none;color:#ccc;font-size:18px;cursor:pointer;padding:0 3px;flex-shrink:0}
+.delbtn:hover{color:#ef4444}
+.empty{color:#bbb;font-size:13px;text-align:center;padding:18px}
+
+/* Tab 3 – Stats */
+#stats-scroll{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:10px}
+.stcard{background:#fff;border-radius:12px;padding:15px;box-shadow:0 1px 4px rgba(0,0,0,.07)}
+.sttitle{font-size:11px;color:#aaa;font-weight:600;margin-bottom:5px;letter-spacing:.3px}
+.stval{font-size:28px;font-weight:800}
+.stsub{font-size:12px;color:#bbb;margin-top:2px}
+.pbar{height:10px;background:#f0f0f0;border-radius:5px;overflow:hidden;margin-top:10px}
+.pfill{height:100%;background:#16a34a;border-radius:5px;transition:width .5s}
+.sgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.sgrid .stcard{margin:0}
+</style>
 </head>
 <body>
 
-<div id="header">
-    <h1>📋 Flyer Tracker</h1>
-    <div id="stats">Laden…</div>
-</div>
+<div id="hdr"><h1>📋 Flyer Tracker – Hogedruk Venlo</h1></div>
 
-<div id="map"></div>
+<div id="content">
 
-<div id="loading">
-    <div class="spinner"></div>
-    <p>Straten ophalen…</p>
-    <small>Eerste keer duurt even (~30s)</small>
-</div>
-
-<div id="legend">
-    <div><span class="leg-line" style="background:#aaa"></span> Niet gedaan</div>
-    <div><span class="leg-line" style="background:#f59e0b"></span> Gepland</div>
-    <div><span class="leg-line" style="background:#16a34a"></span> Gedaan</div>
-</div>
-
-<div id="popup">
-    <span id="close-popup" onclick="closePopup()">✕</span>
-    <div id="popup-name"></div>
-    <div id="popup-current"></div>
-    <div class="btn-row">
-        <button class="btn btn-planned" onclick="setStatus('planned')">📌 Plannen</button>
-        <button class="btn btn-done"    onclick="setStatus('done')">✅ Gedaan</button>
-        <button class="btn btn-none"    onclick="setStatus('none')">✖ Reset</button>
+  <!-- TAB 1: KAART -->
+  <div class="tab on" id="tab-map">
+    <div id="mapsearch">
+      <input id="area-in" type="text" placeholder="Zoek gebied  (bijv. Tegelen, Blerick…)" onkeydown="if(event.key==='Enter')searchArea()">
+      <button class="btnp" onclick="searchArea()">Laden</button>
     </div>
+    <div id="map"></div>
+  </div>
+
+  <!-- TAB 2: STRATEN -->
+  <div class="tab" id="tab-streets">
+    <div id="streets-scroll">
+      <div class="card">
+        <h3>➕ Straat toevoegen</h3>
+        <div class="frow">
+          <div class="fcol" style="flex:2">
+            <label>STRAATNAAM</label>
+            <input id="s-name" type="text" placeholder="Kerkstraat">
+          </div>
+          <div class="fcol">
+            <label>STATUS</label>
+            <select id="s-status">
+              <option value="planned">📌 Gepland</option>
+              <option value="done">✅ Gedaan</option>
+            </select>
+          </div>
+        </div>
+        <div class="frow">
+          <div class="fcol">
+            <label>VAN NR.</label>
+            <input id="s-from" type="number" placeholder="1" min="1">
+          </div>
+          <div class="fcol">
+            <label>TOT NR.</label>
+            <input id="s-to" type="number" placeholder="50" min="1">
+          </div>
+          <div class="fcol">
+            <label>DATUM</label>
+            <input id="s-date" type="date">
+          </div>
+        </div>
+        <button class="btnp" style="width:100%;padding:11px" onclick="addStreet()">Toevoegen</button>
+      </div>
+
+      <div class="card">
+        <h3>📋 Overzicht</h3>
+        <div id="street-list"><p class="empty">Nog geen straten toegevoegd</p></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB 3: STATISTIEKEN -->
+  <div class="tab" id="tab-stats">
+    <div id="stats-scroll">
+      <div class="stcard">
+        <div class="sttitle">VOORTGANG KAARTSTRATEN</div>
+        <div class="stval" id="st-pct" style="color:#1565c0">–%</div>
+        <div class="stsub" id="st-pct-sub">–</div>
+        <div class="pbar"><div class="pfill" id="st-bar" style="width:0%"></div></div>
+      </div>
+      <div class="sgrid">
+        <div class="stcard">
+          <div class="sttitle">GEDAAN</div>
+          <div class="stval" id="st-done" style="color:#16a34a">–</div>
+          <div class="stsub">straten</div>
+        </div>
+        <div class="stcard">
+          <div class="sttitle">GEPLAND</div>
+          <div class="stval" id="st-pl" style="color:#f59e0b">–</div>
+          <div class="stsub">straten</div>
+        </div>
+        <div class="stcard">
+          <div class="sttitle">TOTAAL IN GEBIED</div>
+          <div class="stval" id="st-tot" style="color:#1565c0">–</div>
+          <div class="stsub">straten</div>
+        </div>
+        <div class="stcard">
+          <div class="sttitle">HUIZEN GESCHAT</div>
+          <div class="stval" id="st-huis" style="color:#7c3aed">–</div>
+          <div class="stsub">handmatig ingevoerd</div>
+        </div>
+      </div>
+      <div class="stcard">
+        <div class="sttitle">HANDMATIG TOEGEVOEGD</div>
+        <div class="stval" id="st-man" style="color:#333">–</div>
+        <div class="stsub" id="st-man-sub">– gepland &nbsp;·&nbsp; – gedaan</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Bottom nav -->
+<div id="nav">
+  <button class="nb on" id="nb-map"     onclick="goTab('map')">    <span class="ic">🗺</span>Kaart</button>
+  <button class="nb"    id="nb-streets" onclick="goTab('streets')"><span class="ic">📋</span>Straten</button>
+  <button class="nb"    id="nb-stats"   onclick="goTab('stats')">  <span class="ic">📊</span>Statistieken</button>
+</div>
+
+<!-- GPS btn -->
+<button id="gpsbtn" onclick="toggleGPS()">📍</button>
+
+<!-- Legend -->
+<div id="legend">
+  <div><span class="ll" style="background:#aaa"></span>Niet gedaan</div>
+  <div><span class="ll" style="background:#f59e0b"></span>Gepland</div>
+  <div><span class="ll" style="background:#16a34a"></span>Gedaan</div>
+  <div><span class="ll" style="background:#16a34a;opacity:.5;border:1px dashed #16a34a"></span>Handmatig</div>
+</div>
+
+<!-- Popup -->
+<div id="popup">
+  <span id="xpop" onclick="closePop()">✕</span>
+  <div id="popup-name"></div>
+  <div id="popup-cur"></div>
+  <div class="brow">
+    <button class="btn bpl" onclick="setStatus('planned')">📌 Plannen</button>
+    <button class="btn bdo" onclick="setStatus('done')">✅ Gedaan</button>
+    <button class="btn bno" onclick="setStatus('none')">✖ Reset</button>
+  </div>
+</div>
+
+<!-- Loading -->
+<div id="loading">
+  <div class="spin"></div>
+  <p id="load-msg">Straten ophalen…</p>
+  <small id="load-sub">Eerste keer duurt ~30 seconden</small>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-const STATUS_COLORS = { none: '#aaaaaa', planned: '#f59e0b', done: '#16a34a' };
-const STATUS_WEIGHT = { none: 3, planned: 5, done: 5 };
-const STATUS_OPACITY = { none: 0.45, planned: 1, done: 1 };
-const STATUS_LABELS = { none: 'Niet gedaan', planned: 'Gepland', done: 'Gedaan' };
+// ============================================================
+// TABS
+// ============================================================
+function goTab(t) {
+  document.querySelectorAll('.tab').forEach(el => el.classList.remove('on'));
+  document.querySelectorAll('.nb').forEach(el => el.classList.remove('on'));
+  document.getElementById('tab-' + t).classList.add('on');
+  document.getElementById('nb-' + t).classList.add('on');
+  const isMap = t === 'map';
+  document.getElementById('gpsbtn').style.display = isMap ? 'flex' : 'none';
+  document.getElementById('legend').style.display  = isMap ? 'block' : 'none';
+  if (isMap) setTimeout(() => map.invalidateSize(), 60);
+  if (t === 'streets') loadStreetList();
+  if (t === 'stats')   loadStats();
+}
+
+// ============================================================
+// MAP
+// ============================================================
+const COL = { none:'#aaaaaa', planned:'#f59e0b', done:'#16a34a' };
+const WGT = { none:2, planned:4, done:4 };
+const OPC = { none:.4, planned:1, done:1 };
+const LBL = { none:'Niet gedaan', planned:'Gepland', done:'Gedaan' };
 
 const map = L.map('map').setView([51.370, 6.168], 14);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '© OpenStreetMap',
-    maxZoom: 19
+  attribution:'© OpenStreetMap', maxZoom:19
 }).addTo(map);
 
-let streetLayers = {};   // id → L.geoJSON layer
-let statuses = {};       // id → 'none' | 'planned' | 'done'
-let selectedId = null;
+let sLayers  = {};   // osm_id → {vis, hit}
+let statuses = {};
+let selId    = null;
+let mLayers  = {};   // manual id → layer
+let locMark  = null;
+let watchId  = null;
 
-// ---------- Stats ----------
-function updateStats() {
-    const total   = Object.keys(streetLayers).length;
-    const done    = Object.values(statuses).filter(s => s === 'done').length;
-    const planned = Object.values(statuses).filter(s => s === 'planned').length;
-    document.getElementById('stats').textContent =
-        `✅ ${done}  📌 ${planned}  van ${total} straten`;
-}
-
-// ---------- Statussen laden ----------
+// --- statuses ---
 async function loadStatuses() {
-    const resp = await fetch('/api/status');
-    statuses = await resp.json();
+  const r = await fetch('/api/status');
+  statuses = await r.json();
 }
-
-// ---------- Layer stylen ----------
 function applyStyle(id) {
-    const s = statuses[id] || 'none';
-    if (streetLayers[id]) {
-        streetLayers[id].setStyle({
-            color:   STATUS_COLORS[s],
-            weight:  STATUS_WEIGHT[s],
-            opacity: STATUS_OPACITY[s]
-        });
-    }
+  const s = statuses[id] || 'none';
+  if (sLayers[id]) sLayers[id].vis.setStyle({ color:COL[s], weight:WGT[s], opacity:OPC[s] });
 }
 
-// ---------- Popup ----------
-function openPopup(id, name) {
-    selectedId = id;
-    document.getElementById('popup-name').textContent = name;
-    document.getElementById('popup-current').textContent =
-        'Huidige status: ' + STATUS_LABELS[statuses[id] || 'none'];
-    document.getElementById('popup').style.display = 'block';
+// --- popup ---
+function openPop(id, name) {
+  selId = id;
+  document.getElementById('popup-name').textContent = name;
+  document.getElementById('popup-cur').textContent  = 'Status: ' + LBL[statuses[id] || 'none'];
+  document.getElementById('popup').style.display    = 'block';
+}
+function closePop() {
+  document.getElementById('popup').style.display = 'none';
+  selId = null;
+}
+map.on('click', closePop);
+
+async function setStatus(s) {
+  if (!selId) return;
+  const id = selId;
+  closePop();
+  await fetch('/api/status', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id, status:s})
+  });
+  statuses[id] = s;
+  applyStyle(id);
 }
 
-function closePopup() {
-    document.getElementById('popup').style.display = 'none';
-    selectedId = null;
-}
-
-map.on('click', closePopup);
-
-// ---------- Status opslaan ----------
-async function setStatus(status) {
-    if (!selectedId) return;
-    const id = selectedId;
-    closePopup();
-
-    await fetch('/api/status', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, status })
-    });
-
-    statuses[id] = status;
-    applyStyle(id);
-    updateStats();
-}
-
-// ---------- Alles laden ----------
-async function init() {
+// --- load streets ---
+async function loadStreets() {
+  showLoad('Straten ophalen…', 'Eerste keer duurt ~30 seconden');
+  try {
     await loadStatuses();
+    const r   = await fetch('/api/streets');
+    const gj  = await r.json();
 
-    const resp = await fetch('/api/streets');
-    const geojson = await resp.json();
+    Object.values(sLayers).forEach(l => { map.removeLayer(l.vis); map.removeLayer(l.hit); });
+    sLayers = {};
 
-    document.getElementById('loading').style.display = 'none';
+    gj.features.forEach(f => {
+      const id   = f.id;
+      const name = f.properties.name || 'Onbekend';
+      const s    = statuses[id] || 'none';
 
-    geojson.features.forEach(feature => {
-        const id   = feature.id;
-        const name = feature.properties.name || 'Onbekend';
-        const s    = statuses[id] || 'none';
+      // thin colored visual line
+      const vis = L.geoJSON(f, { style:{ color:COL[s], weight:WGT[s], opacity:OPC[s] } }).addTo(map);
 
-        const layer = L.geoJSON(feature, {
-            style: {
-                color:   STATUS_COLORS[s],
-                weight:  STATUS_WEIGHT[s],
-                opacity: STATUS_OPACITY[s]
-            }
-        });
+      // thick invisible hitbox for easy mobile tap
+      const hit = L.geoJSON(f, { style:{ color:'transparent', weight:22, opacity:0 } }).addTo(map);
+      hit.on('click', e => { L.DomEvent.stopPropagation(e); openPop(id, name); });
 
-        layer.on('click', e => {
-            L.DomEvent.stopPropagation(e);
-            openPopup(id, name);
-        });
-
-        layer.addTo(map);
-        streetLayers[id] = layer;
+      sLayers[id] = { vis, hit };
     });
 
-    updateStats();
+    hideLoad();
+  } catch (err) {
+    document.getElementById('loading').innerHTML =
+      `<p style="color:red;padding:20px">Fout: ${err.message}</p>`;
+  }
 }
 
-init().catch(err => {
-    document.getElementById('loading').innerHTML =
-        '<p style="color:red;padding:20px">Fout bij laden: ' + err.message + '</p>';
-});
+// --- area search ---
+async function searchArea() {
+  const q = document.getElementById('area-in').value.trim();
+  if (!q) return;
+  showLoad('Gebied zoeken…', '');
+  try {
+    const r    = await fetch('/api/set-area', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({query:q})
+    });
+    const data = await r.json();
+    if (data.error) throw new Error(data.error);
+    map.fitBounds([[data.bbox[0],data.bbox[1]],[data.bbox[2],data.bbox[3]]]);
+    showLoad('Straten ophalen…', 'Even geduld…');
+    await loadStreets();
+  } catch (err) {
+    alert('Niet gevonden: ' + err.message);
+    hideLoad();
+  }
+}
+
+// --- GPS ---
+function toggleGPS() {
+  const btn = document.getElementById('gpsbtn');
+  if (watchId) {
+    navigator.geolocation.clearWatch(watchId);
+    watchId = null;
+    if (locMark) { map.removeLayer(locMark); locMark = null; }
+    btn.classList.remove('on');
+  } else {
+    btn.classList.add('on');
+    watchId = navigator.geolocation.watchPosition(pos => {
+      const { latitude:lat, longitude:lng } = pos.coords;
+      if (!locMark) {
+        locMark = L.circleMarker([lat,lng], {
+          radius:10, fillColor:'#1565c0', color:'#fff', weight:3, fillOpacity:1
+        }).addTo(map);
+        map.setView([lat,lng], 17);
+      } else {
+        locMark.setLatLng([lat,lng]);
+      }
+    }, err => {
+      alert('GPS niet beschikbaar');
+      btn.classList.remove('on');
+      watchId = null;
+    }, { enableHighAccuracy:true });
+  }
+}
+
+// --- loading helpers ---
+function showLoad(msg, sub) {
+  document.getElementById('load-msg').textContent = msg;
+  document.getElementById('load-sub').textContent = sub;
+  document.getElementById('loading').style.display = 'flex';
+}
+function hideLoad() { document.getElementById('loading').style.display = 'none'; }
+
+// ============================================================
+// MANUAL STREETS (TAB 2)
+// ============================================================
+async function loadStreetList() {
+  const r       = await fetch('/api/manual-streets');
+  const streets = await r.json();
+  const list    = document.getElementById('street-list');
+
+  if (!streets.length) {
+    list.innerHTML = '<p class="empty">Nog geen straten toegevoegd</p>';
+    drawManual([]);
+    return;
+  }
+
+  list.innerHTML = streets.map(s => `
+    <div class="si">
+      <div class="sinfo">
+        <div class="sname">${s.name}</div>
+        <div class="smeta">
+          ${s.house_from && s.house_to ? `Nr. ${s.house_from}–${s.house_to}` : 'Geen huisnummers'}
+          ${s.date_done ? ` · ${s.date_done}` : ''}
+        </div>
+      </div>
+      <span class="sbadge ${s.status==='done'?'bdo2':'bpl2'}">
+        ${s.status==='done'?'✅ Gedaan':'📌 Gepland'}
+      </span>
+      <button class="delbtn" onclick="delStreet(${s.id})">×</button>
+    </div>
+  `).join('');
+
+  drawManual(streets);
+}
+
+function drawManual(streets) {
+  Object.values(mLayers).forEach(l => map.removeLayer(l));
+  mLayers = {};
+  streets.forEach(s => {
+    if (!s.geometry) return;
+    try {
+      const layer = L.geoJSON(JSON.parse(s.geometry), {
+        style:{ color:COL[s.status]||'#aaa', weight:5, opacity:.85, dashArray:'7,5' }
+      }).addTo(map);
+      mLayers[s.id] = layer;
+    } catch(e) {}
+  });
+}
+
+async function addStreet() {
+  const name   = document.getElementById('s-name').value.trim();
+  const from   = document.getElementById('s-from').value || null;
+  const to     = document.getElementById('s-to').value   || null;
+  const status = document.getElementById('s-status').value;
+  const dt     = document.getElementById('s-date').value || (status==='done' ? new Date().toISOString().split('T')[0] : null);
+
+  if (!name) { alert('Vul een straatnaam in'); return; }
+
+  await fetch('/api/manual-streets', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({ name, house_from:from, house_to:to, status, date_done:dt })
+  });
+
+  ['s-name','s-from','s-to','s-date'].forEach(id => document.getElementById(id).value = '');
+  loadStreetList();
+}
+
+async function delStreet(id) {
+  if (!confirm('Straat verwijderen?')) return;
+  await fetch('/api/manual-streets/' + id, { method:'DELETE' });
+  loadStreetList();
+}
+
+// ============================================================
+// STATS (TAB 3)
+// ============================================================
+async function loadStats() {
+  const r = await fetch('/api/stats');
+  const s = await r.json();
+  const pct = s.total > 0 ? Math.round(s.done / s.total * 100) : 0;
+  document.getElementById('st-pct').textContent     = pct + '%';
+  document.getElementById('st-pct-sub').textContent = `${s.done} van ${s.total} straten gedaan`;
+  document.getElementById('st-bar').style.width     = pct + '%';
+  document.getElementById('st-done').textContent    = s.done;
+  document.getElementById('st-pl').textContent      = s.planned;
+  document.getElementById('st-tot').textContent     = s.total;
+  document.getElementById('st-huis').textContent    = s.estimated_houses ?? '–';
+  document.getElementById('st-man').textContent     = s.manual_total;
+  document.getElementById('st-man-sub').textContent =
+    `${s.manual_planned} gepland · ${s.manual_done} gedaan`;
+}
+
+// ============================================================
+// INIT
+// ============================================================
+loadStreets();
 </script>
 </body>
 </html>
@@ -391,6 +640,7 @@ init().catch(err => {
 def index():
     return render_template_string(HTML)
 
+# --- OSM streets ---
 @app.route('/api/streets')
 def api_streets():
     try:
@@ -398,34 +648,135 @@ def api_streets():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+# --- Area search / update ---
+@app.route('/api/set-area', methods=['POST'])
+def api_set_area():
+    query = request.json.get('query', '').strip()
+    if not query:
+        return jsonify({'error': 'Geen zoekopdracht'}), 400
+
+    try:
+        r = requests.get('https://nominatim.openstreetmap.org/search', params={
+            'q': query, 'format': 'json', 'limit': 1, 'countrycodes': 'nl'
+        }, headers=HEADERS, timeout=15)
+        r.raise_for_status()
+        results = r.json()
+        if not results:
+            return jsonify({'error': f'Geen resultaat voor "{query}"'}), 404
+
+        res   = results[0]
+        bb    = res['boundingbox']           # [min_lat, max_lat, min_lon, max_lon]
+        bbox  = f"{bb[0]},{bb[2]},{bb[1]},{bb[3]}"
+        set_setting('bbox', bbox)
+
+        # Clear cache so new streets are fetched
+        if os.path.exists(CACHE_PATH):
+            os.remove(CACHE_PATH)
+
+        return jsonify({'bbox': [float(bb[0]), float(bb[2]), float(bb[1]), float(bb[3])]})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# --- Street statuses ---
 @app.route('/api/status', methods=['GET'])
 def api_status_get():
     conn = get_db()
     rows = conn.execute('SELECT osm_id, status FROM streets').fetchall()
     conn.close()
-    return jsonify({row['osm_id']: row['status'] for row in rows})
+    return jsonify({r['osm_id']: r['status'] for r in rows})
 
 @app.route('/api/status', methods=['POST'])
 def api_status_post():
-    data = request.get_json()
+    d = request.get_json()
     conn = get_db()
     conn.execute('''
-        INSERT INTO streets (osm_id, status)
-        VALUES (?, ?)
-        ON CONFLICT(osm_id) DO UPDATE
-          SET status=excluded.status,
-              updated_at=CURRENT_TIMESTAMP
-    ''', (data['id'], data['status']))
+        INSERT INTO streets (osm_id, status) VALUES (?,?)
+        ON CONFLICT(osm_id) DO UPDATE SET status=excluded.status, updated_at=CURRENT_TIMESTAMP
+    ''', (d['id'], d['status']))
     conn.commit()
     conn.close()
     return jsonify({'ok': True})
 
+# --- Manual streets ---
+@app.route('/api/manual-streets', methods=['GET'])
+def api_manual_get():
+    conn = get_db()
+    rows = conn.execute('SELECT * FROM manual_streets ORDER BY created_at DESC').fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
+
+@app.route('/api/manual-streets', methods=['POST'])
+def api_manual_post():
+    d    = request.get_json()
+    name = d.get('name', '').strip()
+
+    # Try to find geometry in cache
+    geom = find_street_in_cache(name)
+    geom_json = json.dumps(geom) if geom else None
+
+    conn = get_db()
+    conn.execute('''
+        INSERT INTO manual_streets (name, house_from, house_to, status, date_done, geometry)
+        VALUES (?,?,?,?,?,?)
+    ''', (name, d.get('house_from'), d.get('house_to'),
+          d.get('status', 'planned'), d.get('date_done'), geom_json))
+    conn.commit()
+    conn.close()
+    return jsonify({'ok': True})
+
+@app.route('/api/manual-streets/<int:sid>', methods=['DELETE'])
+def api_manual_delete(sid):
+    conn = get_db()
+    conn.execute('DELETE FROM manual_streets WHERE id=?', (sid,))
+    conn.commit()
+    conn.close()
+    return jsonify({'ok': True})
+
+# --- Stats ---
+@app.route('/api/stats')
+def api_stats():
+    # Total from cache
+    total = 0
+    if os.path.exists(CACHE_PATH):
+        with open(CACHE_PATH) as f:
+            gj = json.load(f)
+        total = len(gj.get('features', []))
+
+    conn = get_db()
+    done    = conn.execute("SELECT COUNT(*) FROM streets WHERE status='done'").fetchone()[0]
+    planned = conn.execute("SELECT COUNT(*) FROM streets WHERE status='planned'").fetchone()[0]
+
+    # Manual stats
+    m_done    = conn.execute("SELECT COUNT(*) FROM manual_streets WHERE status='done'").fetchone()[0]
+    m_planned = conn.execute("SELECT COUNT(*) FROM manual_streets WHERE status='planned'").fetchone()[0]
+
+    # Estimate houses from house number ranges
+    rows = conn.execute(
+        'SELECT house_from, house_to FROM manual_streets WHERE house_from IS NOT NULL AND house_to IS NOT NULL'
+    ).fetchall()
+    conn.close()
+
+    estimated = sum(
+        max(1, (r['house_to'] - r['house_from']) // 2 + 1)
+        for r in rows if r['house_to'] and r['house_from'] and r['house_to'] >= r['house_from']
+    )
+
+    return jsonify({
+        'total':            total,
+        'done':             done,
+        'planned':          planned,
+        'manual_total':     m_done + m_planned,
+        'manual_done':      m_done,
+        'manual_planned':   m_planned,
+        'estimated_houses': estimated if estimated > 0 else None
+    })
+
+# --- Cache refresh ---
 @app.route('/api/refresh', methods=['POST'])
 def api_refresh():
-    """Verwijder de straten-cache zodat Overpass opnieuw wordt bevraagd."""
     if os.path.exists(CACHE_PATH):
         os.remove(CACHE_PATH)
-    return jsonify({'ok': True, 'message': 'Cache verwijderd, herlaad de pagina'})
+    return jsonify({'ok': True})
 
 # ---------------------------------------------------------------------------
 
