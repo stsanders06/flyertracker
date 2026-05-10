@@ -10,6 +10,7 @@ app = Flask(__name__)
 DATA_DIR    = os.environ.get('DATA_DIR', '/data')
 DB_PATH     = os.path.join(DATA_DIR, 'flyertracker.db')
 CACHE_PATH  = os.path.join(DATA_DIR, 'streets_cache.json')
+BBOX_FILE   = os.path.join(DATA_DIR, 'bbox.txt')
 
 DEFAULT_BBOX   = "51.27,6.06,51.42,6.23"
 DEFAULT_CENTER = [51.35, 6.15]
@@ -61,8 +62,7 @@ def init_db():
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
     ''')
-    for k, v in [('bbox', DEFAULT_BBOX),
-                 ('center_lat', str(DEFAULT_CENTER[0])),
+    for k, v in [('center_lat', str(DEFAULT_CENTER[0])),
                  ('center_lng', str(DEFAULT_CENTER[1])),
                  ('zoom', str(DEFAULT_ZOOM))]:
         conn.execute('INSERT OR IGNORE INTO settings (key,value) VALUES (?,?)', (k, v))
@@ -119,15 +119,26 @@ def overpass_to_geojson(data):
     return {'type': 'FeatureCollection', 'features': features}
 
 def get_streets_geojson():
+    # Invalidate cache if DEFAULT_BBOX changed since last fetch
     if os.path.exists(CACHE_PATH):
-        with open(CACHE_PATH) as f:
-            return json.load(f)
-    bbox = get_setting('bbox', DEFAULT_BBOX)
-    data = fetch_from_overpass(bbox)
-    gj   = overpass_to_geojson(data)
-    with open(CACHE_PATH, 'w') as f:
-        json.dump(gj, f)
-    return gj
+        try:
+            cached_bbox = open(BBOX_FILE).read().strip() if os.path.exists(BBOX_FILE) else ''
+        except Exception:
+            cached_bbox = ''
+        if cached_bbox != DEFAULT_BBOX:
+            os.remove(CACHE_PATH)
+
+    if not os.path.exists(CACHE_PATH):
+        data = fetch_from_overpass(DEFAULT_BBOX)
+        gj   = overpass_to_geojson(data)
+        with open(CACHE_PATH, 'w') as f:
+            json.dump(gj, f)
+        with open(BBOX_FILE, 'w') as f:
+            f.write(DEFAULT_BBOX)
+        return gj
+
+    with open(CACHE_PATH) as f:
+        return json.load(f)
 
 def find_street_in_cache(name):
     """Return the first matching GeoJSON feature from the cache by street name."""
