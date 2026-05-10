@@ -35,6 +35,8 @@ def init_db():
             osm_id     TEXT PRIMARY KEY,
             name       TEXT,
             status     TEXT DEFAULT 'none',
+            house_from INTEGER,
+            house_to   INTEGER,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -62,6 +64,12 @@ def init_db():
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
     ''')
+    for stmt in ['ALTER TABLE streets ADD COLUMN house_from INTEGER',
+                 'ALTER TABLE streets ADD COLUMN house_to INTEGER']:
+        try:
+            conn.execute(stmt)
+        except Exception:
+            pass
     for k, v in [('center_lat', str(DEFAULT_CENTER[0])),
                  ('center_lng', str(DEFAULT_CENTER[1])),
                  ('zoom', str(DEFAULT_ZOOM))]:
@@ -119,13 +127,15 @@ def overpass_to_geojson(data):
     return {'type': 'FeatureCollection', 'features': features}
 
 def get_streets_geojson():
-    # Invalidate cache if DEFAULT_BBOX changed since last fetch
-    if os.path.exists(CACHE_PATH):
+    # Invalidate caches if DEFAULT_BBOX changed
+    cached_bbox = ''
+    if os.path.exists(BBOX_FILE):
         try:
-            cached_bbox = open(BBOX_FILE).read().strip() if os.path.exists(BBOX_FILE) else ''
+            cached_bbox = open(BBOX_FILE).read().strip()
         except Exception:
-            cached_bbox = ''
-        if cached_bbox != DEFAULT_BBOX:
+            pass
+    if cached_bbox != DEFAULT_BBOX:
+        if os.path.exists(CACHE_PATH):
             os.remove(CACHE_PATH)
 
     if not os.path.exists(CACHE_PATH):
@@ -370,6 +380,16 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:
   <span id="xpop" onclick="closePop()">✕</span>
   <div id="popup-name"></div>
   <div id="popup-cur"></div>
+  <div class="frow" style="margin:12px 0 14px">
+    <div class="fcol">
+      <label style="font-size:10px;color:#aaa;font-weight:600">VAN NR.</label>
+      <input id="popup-from" type="number" placeholder="1" min="1">
+    </div>
+    <div class="fcol">
+      <label style="font-size:10px;color:#aaa;font-weight:600">TOT NR.</label>
+      <input id="popup-to" type="number" placeholder="50" min="1">
+    </div>
+  </div>
   <div class="brow">
     <button class="btn bpl" onclick="setStatus('planned')">📌 Plannen</button>
     <button class="btn bdo" onclick="setStatus('done')">✅ Gedaan</button>
@@ -410,22 +430,31 @@ const WGT = { none:2, planned:4, done:4 };
 const OPC = { none:.4, planned:1, done:1 };
 const LBL = { none:'Niet gedaan', planned:'Gepland', done:'Gedaan' };
 
-const map = L.map('map').setView([51.370, 6.168], 14);
+const map = L.map('map').setView([51.35, 6.15], 12);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution:'© OpenStreetMap', maxZoom:19
 }).addTo(map);
 
-let sLayers  = {};   // osm_id → {vis, hit}
-let statuses = {};
-let selId    = null;
-let mLayers  = {};   // manual id → layer
-let locMark  = null;
-let watchId  = null;
+let sLayers   = {};   // osm_id → {vis, hit}
+let statuses  = {};   // osm_id → status string
+let houseNums = {};   // osm_id → {from, to}
+let segsByName = {}; // street name → [osm_id, ...]
+let selId     = null;
+let selName   = null;
+let mLayers   = {};   // manual id → layer
+let locMark   = null;
+let watchId   = null;
 
 // --- statuses ---
 async function loadStatuses() {
-  const r = await fetch('/api/status');
-  statuses = await r.json();
+  const r   = await fetch('/api/status');
+  const raw = await r.json();
+  statuses  = {};
+  houseNums = {};
+  for (const [id, val] of Object.entries(raw)) {
+    statuses[id]  = val.status;
+    houseNums[id] = { from: val.house_from, to: val.house_to };
+  }
 }
 function applyStyle(id) {
   const s = statuses[id] || 'none';
@@ -434,27 +463,41 @@ function applyStyle(id) {
 
 // --- popup ---
 function openPop(id, name) {
-  selId = id;
+  selId   = id;
+  selName = name;
   document.getElementById('popup-name').textContent = name;
-  document.getElementById('popup-cur').textContent  = 'Status: ' + LBL[statuses[id] || 'none'];
-  document.getElementById('popup').style.display    = 'block';
+  const segs  = segsByName[name] || [];
+  const done  = segs.filter(sid => statuses[sid] === 'done').length;
+  const plan  = segs.filter(sid => statuses[sid] === 'planned').length;
+  const total = segs.length;
+  const pct   = total > 1 ? ` · ${Math.round((done+plan)/total*100)}% gedekt` : '';
+  document.getElementById('popup-cur').textContent =
+    'Status: ' + LBL[statuses[id] || 'none'] + (total > 1 ? ` (${done+plan}/${total} segm.${pct})` : '');
+  const nums = houseNums[id] || {};
+  document.getElementById('popup-from').value = nums.from || '';
+  document.getElementById('popup-to').value   = nums.to   || '';
+  document.getElementById('popup').style.display = 'block';
 }
 function closePop() {
   document.getElementById('popup').style.display = 'none';
-  selId = null;
+  selId = null; selName = null;
 }
 map.on('click', closePop);
 
 async function setStatus(s) {
   if (!selId) return;
-  const id = selId;
+  const id   = selId;
+  const name = selName;
+  const from = document.getElementById('popup-from').value || null;
+  const to   = document.getElementById('popup-to').value   || null;
   closePop();
   await fetch('/api/status', {
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({id, status:s})
+    body:JSON.stringify({id, name, status:s, house_from:from ? +from : null, house_to:to ? +to : null})
   });
-  statuses[id] = s;
+  statuses[id]  = s;
+  houseNums[id] = { from: from ? +from : null, to: to ? +to : null };
   applyStyle(id);
 }
 
@@ -468,17 +511,18 @@ async function loadStreets() {
     if (gj.error) throw new Error(gj.error);
 
     Object.values(sLayers).forEach(l => { map.removeLayer(l.vis); map.removeLayer(l.hit); });
-    sLayers = {};
+    sLayers    = {};
+    segsByName = {};
 
     gj.features.forEach(f => {
       const id   = f.id;
       const name = f.properties.name || 'Onbekend';
       const s    = statuses[id] || 'none';
 
-      // thin colored visual line
-      const vis = L.geoJSON(f, { style:{ color:COL[s], weight:WGT[s], opacity:OPC[s] } }).addTo(map);
+      if (!segsByName[name]) segsByName[name] = [];
+      segsByName[name].push(id);
 
-      // thick invisible hitbox for easy mobile tap
+      const vis = L.geoJSON(f, { style:{ color:COL[s], weight:WGT[s], opacity:OPC[s] } }).addTo(map);
       const hit = L.geoJSON(f, { style:{ color:'transparent', weight:22, opacity:0 } }).addTo(map);
       hit.on('click', e => { L.DomEvent.stopPropagation(e); openPop(id, name); });
 
@@ -539,20 +583,37 @@ function showLoad(msg, sub) {
 function hideLoad() { document.getElementById('loading').style.display = 'none'; }
 
 // ============================================================
-// MANUAL STREETS (TAB 2)
+// STREETS TAB (TAB 2)
 // ============================================================
 async function loadStreetList() {
-  const r       = await fetch('/api/manual-streets');
-  const streets = await r.json();
-  const list    = document.getElementById('street-list');
+  const [markedRes, manualRes] = await Promise.all([
+    fetch('/api/streets-marked'),
+    fetch('/api/manual-streets')
+  ]);
+  const marked = await markedRes.json();
+  const manual = await manualRes.json();
+  const list   = document.getElementById('street-list');
 
-  if (!streets.length) {
+  if (!marked.length && !manual.length) {
     list.innerHTML = '<p class="empty">Nog geen straten toegevoegd</p>';
     drawManual([]);
     return;
   }
 
-  list.innerHTML = streets.map(s => `
+  const markedHtml = marked.map(s => `
+    <div class="si">
+      <div class="sinfo">
+        <div class="sname">🗺 ${s.name || '–'}</div>
+        <div class="smeta">${s.house_from && s.house_to ? `Nr. ${s.house_from}–${s.house_to}` : 'Geen huisnummers'}</div>
+      </div>
+      <span class="sbadge ${s.status==='done'?'bdo2':'bpl2'}">
+        ${s.status==='done'?'✅ Gedaan':'📌 Gepland'}
+      </span>
+      <button class="delbtn" onclick="resetStreet('${s.osm_id}')">×</button>
+    </div>
+  `).join('');
+
+  const manualHtml = manual.map(s => `
     <div class="si">
       <div class="sinfo">
         <div class="sname">${s.name}</div>
@@ -568,7 +629,20 @@ async function loadStreetList() {
     </div>
   `).join('');
 
-  drawManual(streets);
+  list.innerHTML = markedHtml + manualHtml;
+  drawManual(manual);
+}
+
+async function resetStreet(osmId) {
+  await fetch('/api/status', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id:osmId, status:'none', house_from:null, house_to:null})
+  });
+  statuses[osmId]  = 'none';
+  houseNums[osmId] = {};
+  applyStyle(osmId);
+  loadStreetList();
 }
 
 function drawManual(streets) {
@@ -657,21 +731,38 @@ def api_streets():
 @app.route('/api/status', methods=['GET'])
 def api_status_get():
     conn = get_db()
-    rows = conn.execute('SELECT osm_id, status FROM streets').fetchall()
+    rows = conn.execute('SELECT osm_id, name, status, house_from, house_to FROM streets').fetchall()
     conn.close()
-    return jsonify({r['osm_id']: r['status'] for r in rows})
+    return jsonify({r['osm_id']: {
+        'status': r['status'], 'name': r['name'],
+        'house_from': r['house_from'], 'house_to': r['house_to']
+    } for r in rows})
 
 @app.route('/api/status', methods=['POST'])
 def api_status_post():
     d = request.get_json()
     conn = get_db()
     conn.execute('''
-        INSERT INTO streets (osm_id, status) VALUES (?,?)
-        ON CONFLICT(osm_id) DO UPDATE SET status=excluded.status, updated_at=CURRENT_TIMESTAMP
-    ''', (d['id'], d['status']))
+        INSERT INTO streets (osm_id, name, status, house_from, house_to) VALUES (?,?,?,?,?)
+        ON CONFLICT(osm_id) DO UPDATE SET
+            name=COALESCE(excluded.name, streets.name),
+            status=excluded.status,
+            house_from=excluded.house_from,
+            house_to=excluded.house_to,
+            updated_at=CURRENT_TIMESTAMP
+    ''', (d['id'], d.get('name'), d['status'], d.get('house_from'), d.get('house_to')))
     conn.commit()
     conn.close()
     return jsonify({'ok': True})
+
+@app.route('/api/streets-marked')
+def api_streets_marked():
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT osm_id, name, status, house_from, house_to FROM streets WHERE status != 'none' ORDER BY name"
+    ).fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
 
 # --- Manual streets ---
 @app.route('/api/manual-streets', methods=['GET'])
@@ -711,30 +802,34 @@ def api_manual_delete(sid):
 # --- Stats ---
 @app.route('/api/stats')
 def api_stats():
-    # Total from cache
+    # Total unique street names in area
     total = 0
     if os.path.exists(CACHE_PATH):
         with open(CACHE_PATH) as f:
             gj = json.load(f)
-        total = len(gj.get('features', []))
+        total = len({f['properties']['name'] for f in gj.get('features', [])})
 
     conn = get_db()
-    done    = conn.execute("SELECT COUNT(*) FROM streets WHERE status='done'").fetchone()[0]
-    planned = conn.execute("SELECT COUNT(*) FROM streets WHERE status='planned'").fetchone()[0]
+    done    = conn.execute("SELECT COUNT(DISTINCT name) FROM streets WHERE status='done' AND name IS NOT NULL").fetchone()[0]
+    planned = conn.execute("SELECT COUNT(DISTINCT name) FROM streets WHERE status='planned' AND name IS NOT NULL").fetchone()[0]
 
     # Manual stats
     m_done    = conn.execute("SELECT COUNT(*) FROM manual_streets WHERE status='done'").fetchone()[0]
     m_planned = conn.execute("SELECT COUNT(*) FROM manual_streets WHERE status='planned'").fetchone()[0]
 
-    # Estimate houses from house number ranges
-    rows = conn.execute(
+    # Estimate houses from both manual and map streets
+    manual_rows = conn.execute(
         'SELECT house_from, house_to FROM manual_streets WHERE house_from IS NOT NULL AND house_to IS NOT NULL'
+    ).fetchall()
+    map_rows = conn.execute(
+        'SELECT house_from, house_to FROM streets WHERE house_from IS NOT NULL AND house_to IS NOT NULL'
     ).fetchall()
     conn.close()
 
+    all_rows = list(manual_rows) + list(map_rows)
     estimated = sum(
         max(1, (r['house_to'] - r['house_from']) // 2 + 1)
-        for r in rows if r['house_to'] and r['house_from'] and r['house_to'] >= r['house_from']
+        for r in all_rows if r['house_to'] and r['house_from'] and r['house_to'] >= r['house_from']
     )
 
     return jsonify({
@@ -750,8 +845,9 @@ def api_stats():
 # --- Cache refresh ---
 @app.route('/api/refresh', methods=['POST'])
 def api_refresh():
-    if os.path.exists(CACHE_PATH):
-        os.remove(CACHE_PATH)
+    for p in [CACHE_PATH, BBOX_FILE]:
+        if os.path.exists(p):
+            os.remove(p)
     return jsonify({'ok': True})
 
 # ---------------------------------------------------------------------------
