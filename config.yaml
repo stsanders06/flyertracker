@@ -1,0 +1,16 @@
+name: "Flyer Tracker"
+description: "Kaart om geflyerde straten bij te houden – Hogedruk Venlo"
+version: "1.0.0"
+slug: "flyertracker"
+init: false
+arch:
+  - aarch64
+  - armhf
+  - armv7
+  - amd64
+ports:
+  8099/tcp: 8099
+ports_description:
+  8099/tcp: "Flyer Tracker web interface"
+map:
+  - addon_config:rw
