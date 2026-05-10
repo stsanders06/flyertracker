@@ -7,13 +7,13 @@ from datetime import date
 
 app = Flask(__name__)
 
-DATA_DIR    = '/data'
+DATA_DIR    = os.environ.get('DATA_DIR', '/data')
 DB_PATH     = os.path.join(DATA_DIR, 'flyertracker.db')
 CACHE_PATH  = os.path.join(DATA_DIR, 'streets_cache.json')
 
-DEFAULT_BBOX   = "51.33,6.10,51.42,6.22"
-DEFAULT_CENTER = [51.370, 6.168]
-DEFAULT_ZOOM   = 14
+DEFAULT_BBOX   = "51.27,6.06,51.42,6.23"
+DEFAULT_CENTER = [51.35, 6.15]
+DEFAULT_ZOOM   = 12
 
 HEADERS = {'User-Agent': 'HogedrukVenlo/1.0 (flyertracker)'}
 
@@ -52,6 +52,13 @@ def init_db():
         CREATE TABLE IF NOT EXISTS settings (
             key   TEXT PRIMARY KEY,
             value TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS areas (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            name       TEXT NOT NULL,
+            bbox       TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
     ''')
     for k, v in [('bbox', DEFAULT_BBOX),
@@ -243,10 +250,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:
 
   <!-- TAB 1: KAART -->
   <div class="tab on" id="tab-map">
-    <div id="mapsearch">
-      <input id="area-in" type="text" placeholder="Zoek gebied  (bijv. Tegelen, Blerick…)" onkeydown="if(event.key==='Enter')searchArea()">
-      <button class="btnp" onclick="searchArea()">Laden</button>
-    </div>
     <div id="map"></div>
   </div>
 
@@ -451,6 +454,7 @@ async function loadStreets() {
     await loadStatuses();
     const r   = await fetch('/api/streets');
     const gj  = await r.json();
+    if (gj.error) throw new Error(gj.error);
 
     Object.values(sLayers).forEach(l => { map.removeLayer(l.vis); map.removeLayer(l.hit); });
     sLayers = {};
@@ -477,26 +481,6 @@ async function loadStreets() {
   }
 }
 
-// --- area search ---
-async function searchArea() {
-  const q = document.getElementById('area-in').value.trim();
-  if (!q) return;
-  showLoad('Gebied zoeken…', '');
-  try {
-    const r    = await fetch('/api/set-area', {
-      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({query:q})
-    });
-    const data = await r.json();
-    if (data.error) throw new Error(data.error);
-    map.fitBounds([[data.bbox[0],data.bbox[1]],[data.bbox[2],data.bbox[3]]]);
-    showLoad('Straten ophalen…', 'Even geduld…');
-    await loadStreets();
-  } catch (err) {
-    alert('Niet gevonden: ' + err.message);
-    hideLoad();
-  }
-}
-
 // --- GPS ---
 function toggleGPS() {
   const btn = document.getElementById('gpsbtn');
@@ -507,6 +491,11 @@ function toggleGPS() {
     btn.classList.remove('on');
   } else {
     btn.classList.add('on');
+    if (!navigator.geolocation) {
+      alert('Locatie wordt niet ondersteund door deze browser.');
+      btn.classList.remove('on');
+      return;
+    }
     watchId = navigator.geolocation.watchPosition(pos => {
       const { latitude:lat, longitude:lng } = pos.coords;
       if (!locMark) {
@@ -518,7 +507,12 @@ function toggleGPS() {
         locMark.setLatLng([lat,lng]);
       }
     }, err => {
-      alert('GPS niet beschikbaar');
+      const msg = err.code === 1
+        ? 'Locatietoegang geweigerd. Gebruik HTTPS of open de app op hetzelfde apparaat via localhost.'
+        : err.code === 2
+          ? 'Locatie niet beschikbaar.'
+          : 'Locatie time-out.';
+      alert(msg);
       btn.classList.remove('on');
       watchId = null;
     }, { enableHighAccuracy:true });
@@ -645,35 +639,6 @@ def index():
 def api_streets():
     try:
         return jsonify(get_streets_geojson())
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-# --- Area search / update ---
-@app.route('/api/set-area', methods=['POST'])
-def api_set_area():
-    query = request.json.get('query', '').strip()
-    if not query:
-        return jsonify({'error': 'Geen zoekopdracht'}), 400
-
-    try:
-        r = requests.get('https://nominatim.openstreetmap.org/search', params={
-            'q': query, 'format': 'json', 'limit': 1, 'countrycodes': 'nl'
-        }, headers=HEADERS, timeout=15)
-        r.raise_for_status()
-        results = r.json()
-        if not results:
-            return jsonify({'error': f'Geen resultaat voor "{query}"'}), 404
-
-        res   = results[0]
-        bb    = res['boundingbox']           # [min_lat, max_lat, min_lon, max_lon]
-        bbox  = f"{bb[0]},{bb[2]},{bb[1]},{bb[3]}"
-        set_setting('bbox', bbox)
-
-        # Clear cache so new streets are fetched
-        if os.path.exists(CACHE_PATH):
-            os.remove(CACHE_PATH)
-
-        return jsonify({'bbox': [float(bb[0]), float(bb[2]), float(bb[1]), float(bb[3])]})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
