@@ -891,4 +891,4 @@ if __name__ == '__main__':
     ssl_ctx = ensure_ssl_cert()
     scheme = 'https' if ssl_ctx else 'http'
     print(f'Starting on {scheme}://0.0.0.0:8099')
-    app.run(host='0.0.0.0', port=8099, debug=False, ssl_context=ssl_ctx)
+    app.run(host='0.0.0.0', port=8099, debug=False, ssl_context=ssl_ctx, threaded=True)
