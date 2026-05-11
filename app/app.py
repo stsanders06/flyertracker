@@ -11,6 +11,8 @@ DATA_DIR    = os.environ.get('DATA_DIR', '/data')
 DB_PATH     = os.path.join(DATA_DIR, 'flyertracker.db')
 CACHE_PATH  = os.path.join(DATA_DIR, 'streets_cache.json')
 BBOX_FILE   = os.path.join(DATA_DIR, 'bbox.txt')
+CERT_FILE   = os.path.join(DATA_DIR, 'cert.pem')
+KEY_FILE    = os.path.join(DATA_DIR, 'key.pem')
 
 DEFAULT_BBOX   = "51.27,6.06,51.42,6.23"
 DEFAULT_CENTER = [51.35, 6.15]
@@ -852,6 +854,41 @@ def api_refresh():
 
 # ---------------------------------------------------------------------------
 
+def ensure_ssl_cert():
+    if os.path.exists(CERT_FILE) and os.path.exists(KEY_FILE):
+        return (CERT_FILE, KEY_FILE)
+    try:
+        from datetime import datetime, timedelta, timezone
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+
+        now  = datetime.now(timezone.utc)
+        key  = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'flyertracker')])
+        cert = (x509.CertificateBuilder()
+            .subject_name(name).issuer_name(name)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now)
+            .not_valid_after(now + timedelta(days=3650))
+            .sign(key, hashes.SHA256()))
+        with open(KEY_FILE, 'wb') as f:
+            f.write(key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.TraditionalOpenSSL,
+                serialization.NoEncryption()))
+        with open(CERT_FILE, 'wb') as f:
+            f.write(cert.public_bytes(serialization.Encoding.PEM))
+        return (CERT_FILE, KEY_FILE)
+    except Exception as e:
+        print(f'[WARN] SSL cert generation failed ({e}), running over HTTP (GPS will not work on mobile)')
+        return None
+
 if __name__ == '__main__':
     init_db()
-    app.run(host='0.0.0.0', port=8099, debug=False)
+    ssl_ctx = ensure_ssl_cert()
+    scheme = 'https' if ssl_ctx else 'http'
+    print(f'Starting on {scheme}://0.0.0.0:8099')
+    app.run(host='0.0.0.0', port=8099, debug=False, ssl_context=ssl_ctx)
