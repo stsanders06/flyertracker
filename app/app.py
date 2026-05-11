@@ -888,7 +888,5 @@ def ensure_ssl_cert():
 
 if __name__ == '__main__':
     init_db()
-    ssl_ctx = ensure_ssl_cert()
-    scheme = 'https' if ssl_ctx else 'http'
-    print(f'Starting on {scheme}://0.0.0.0:8099')
-    app.run(host='0.0.0.0', port=8099, debug=False, ssl_context=ssl_ctx, threaded=True)
+    print('Starting on http://0.0.0.0:8099')
+    app.run(host='0.0.0.0', port=8099, debug=False, threaded=True)

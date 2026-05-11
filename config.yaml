@@ -12,6 +12,6 @@ ports:
   8099/tcp: 8099
 ports_description:
   8099/tcp: "Flyer Tracker web interface"
-webui: "https://[HOST]:8099"
+webui: "http://[HOST]:8099"
 map:
   - addon_config:rw
