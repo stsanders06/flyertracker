@@ -575,14 +575,14 @@ function updateGpsBar(lat, lng) {
 }
 
 async function markDetectedStreet(status) {
-  if (!detectedName) return;
-  const r = await fetch('/api/mark-by-name', {
+  if (!detectedId) return;
+  await fetch('/api/status', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ name: detectedName, status })
+    body: JSON.stringify({ id: detectedId, name: detectedName, status, house_from: null, house_to: null })
   });
-  const result = await r.json();
-  (result.osm_ids || []).forEach(id => { statuses[id] = status; applyStyle(id); });
+  statuses[detectedId] = status;
+  applyStyle(detectedId);
 }
 
 function showLoad(msg, sub) {
