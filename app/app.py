@@ -129,7 +129,6 @@ def overpass_to_geojson(data):
     return {'type': 'FeatureCollection', 'features': features}
 
 def get_streets_geojson():
-    # Invalidate caches if DEFAULT_BBOX changed
     cached_bbox = ''
     if os.path.exists(BBOX_FILE):
         try:
@@ -152,17 +151,11 @@ def get_streets_geojson():
     with open(CACHE_PATH) as f:
         return json.load(f)
 
-def find_street_in_cache(name):
-    """Return the first matching GeoJSON feature from the cache by street name."""
+def load_cache():
     if not os.path.exists(CACHE_PATH):
         return None
     with open(CACHE_PATH) as f:
-        gj = json.load(f)
-    name_lower = name.lower()
-    for feat in gj.get('features', []):
-        if feat['properties'].get('name', '').lower() == name_lower:
-            return feat['geometry']
-    return None
+        return json.load(f)
 
 # ---------------------------------------------------------------------------
 # HTML
@@ -193,13 +186,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:
 .nb{flex:1;padding:9px 4px 7px;border:none;background:none;cursor:pointer;font-size:10px;color:#999;display:flex;flex-direction:column;align-items:center;gap:3px}
 .nb .ic{font-size:21px;line-height:1}
 .nb.on{color:#1565c0}
-
-/* Search bar (map tab) */
-#mapsearch{padding:9px 10px;background:#fff;border-bottom:1px solid #e5e5e5;display:flex;gap:8px;flex-shrink:0}
-#area-in{flex:1;padding:8px 11px;border:1px solid #ddd;border-radius:8px;font-size:14px;outline:none}
-#area-in:focus{border-color:#1565c0}
-.btnp{padding:8px 14px;background:#1565c0;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap}
-.btnp:active{filter:brightness(.88)}
 
 /* Map */
 #map{flex:1}
@@ -252,6 +238,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:
 .delbtn{background:none;border:none;color:#ccc;font-size:18px;cursor:pointer;padding:0 3px;flex-shrink:0}
 .delbtn:hover{color:#ef4444}
 .empty{color:#bbb;font-size:13px;text-align:center;padding:18px}
+.vmsg{font-size:11px;margin-top:3px}
 
 /* Tab 3 – Stats */
 #stats-scroll{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:10px}
@@ -284,7 +271,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:
         <div class="frow">
           <div class="fcol" style="flex:2">
             <label>STRAATNAAM</label>
-            <input id="s-name" type="text" placeholder="Kerkstraat">
+            <input id="s-name" type="text" placeholder="Kerkstraat" list="street-names-list" autocomplete="off" oninput="onStreetInput()">
+            <datalist id="street-names-list"></datalist>
+            <div id="s-name-msg" class="vmsg" style="display:none"></div>
           </div>
           <div class="fcol">
             <label>STATUS</label>
@@ -294,21 +283,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:
             </select>
           </div>
         </div>
-        <div class="frow">
-          <div class="fcol">
-            <label>VAN NR.</label>
-            <input id="s-from" type="number" placeholder="1" min="1">
-          </div>
-          <div class="fcol">
-            <label>TOT NR.</label>
-            <input id="s-to" type="number" placeholder="50" min="1">
-          </div>
-          <div class="fcol">
-            <label>DATUM</label>
-            <input id="s-date" type="date">
-          </div>
-        </div>
-        <button class="btnp" style="width:100%;padding:11px" onclick="addStreet()">Toevoegen</button>
+        <button class="btnp" style="width:100%;padding:11px;background:#1565c0;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer" onclick="addStreet()">Toevoegen</button>
       </div>
 
       <div class="card">
@@ -322,7 +297,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:
   <div class="tab" id="tab-stats">
     <div id="stats-scroll">
       <div class="stcard">
-        <div class="sttitle">VOORTGANG KAARTSTRATEN</div>
+        <div class="sttitle">VOORTGANG STRATEN</div>
         <div class="stval" id="st-pct" style="color:#1565c0">–%</div>
         <div class="stsub" id="st-pct-sub">–</div>
         <div class="pbar"><div class="pfill" id="st-bar" style="width:0%"></div></div>
@@ -344,15 +319,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:
           <div class="stsub">straten</div>
         </div>
         <div class="stcard">
-          <div class="sttitle">HUIZEN GESCHAT</div>
-          <div class="stval" id="st-huis" style="color:#7c3aed">–</div>
-          <div class="stsub">handmatig ingevoerd</div>
+          <div class="sttitle">SEGMENTDEKKING</div>
+          <div class="stval" id="st-segpct" style="color:#7c3aed">–</div>
+          <div class="stsub">% segmenten gedaan</div>
         </div>
-      </div>
-      <div class="stcard">
-        <div class="sttitle">HANDMATIG TOEGEVOEGD</div>
-        <div class="stval" id="st-man" style="color:#333">–</div>
-        <div class="stsub" id="st-man-sub">– gepland &nbsp;·&nbsp; – gedaan</div>
       </div>
     </div>
   </div>
@@ -374,7 +344,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:
   <div><span class="ll" style="background:#aaa"></span>Niet gedaan</div>
   <div><span class="ll" style="background:#f59e0b"></span>Gepland</div>
   <div><span class="ll" style="background:#16a34a"></span>Gedaan</div>
-  <div><span class="ll" style="background:#16a34a;opacity:.5;border:1px dashed #16a34a"></span>Handmatig</div>
 </div>
 
 <!-- Popup -->
@@ -382,17 +351,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:
   <span id="xpop" onclick="closePop()">✕</span>
   <div id="popup-name"></div>
   <div id="popup-cur"></div>
-  <div class="frow" style="margin:12px 0 14px">
-    <div class="fcol">
-      <label style="font-size:10px;color:#aaa;font-weight:600">VAN NR.</label>
-      <input id="popup-from" type="number" placeholder="1" min="1">
-    </div>
-    <div class="fcol">
-      <label style="font-size:10px;color:#aaa;font-weight:600">TOT NR.</label>
-      <input id="popup-to" type="number" placeholder="50" min="1">
-    </div>
-  </div>
-  <div class="brow">
+  <div class="brow" style="margin-top:14px">
     <button class="btn bpl" onclick="setStatus('planned')">📌 Plannen</button>
     <button class="btn bdo" onclick="setStatus('done')">✅ Gedaan</button>
     <button class="btn bno" onclick="setStatus('none')">✖ Reset</button>
@@ -420,7 +379,7 @@ function goTab(t) {
   document.getElementById('gpsbtn').style.display = isMap ? 'flex' : 'none';
   document.getElementById('legend').style.display  = isMap ? 'block' : 'none';
   if (isMap) setTimeout(() => map.invalidateSize(), 60);
-  if (t === 'streets') loadStreetList();
+  if (t === 'streets') { loadStreetList(); loadStreetNames(); }
   if (t === 'stats')   loadStats();
 }
 
@@ -437,27 +396,23 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution:'© OpenStreetMap', maxZoom:19
 }).addTo(map);
 
-let sLayers   = {};   // osm_id → {vis, hit}
-let statuses  = {};   // osm_id → status string
-let houseNums = {};   // osm_id → {from, to}
-let segsByName = {}; // street name → [osm_id, ...]
-let selId     = null;
-let selName   = null;
-let mLayers   = {};   // manual id → layer
-let locMark   = null;
-let watchId   = null;
+let sLayers    = {};  // osm_id → {vis, hit}
+let statuses   = {};  // osm_id → status string
+let segsByName = {};  // street name → [osm_id, ...]
+let selId      = null;
+let selName    = null;
+let locMark    = null;
+let watchId    = null;
 
-// --- statuses ---
 async function loadStatuses() {
   const r   = await fetch('/api/status');
   const raw = await r.json();
   statuses  = {};
-  houseNums = {};
   for (const [id, val] of Object.entries(raw)) {
-    statuses[id]  = val.status;
-    houseNums[id] = { from: val.house_from, to: val.house_to };
+    statuses[id] = val.status;
   }
 }
+
 function applyStyle(id) {
   const s = statuses[id] || 'none';
   if (sLayers[id]) sLayers[id].vis.setStyle({ color:COL[s], weight:WGT[s], opacity:OPC[s] });
@@ -472,14 +427,12 @@ function openPop(id, name) {
   const done  = segs.filter(sid => statuses[sid] === 'done').length;
   const plan  = segs.filter(sid => statuses[sid] === 'planned').length;
   const total = segs.length;
-  const pct   = total > 1 ? ` · ${Math.round((done+plan)/total*100)}% gedekt` : '';
+  const pct   = total > 0 ? Math.round((done + plan) / total * 100) : 0;
   document.getElementById('popup-cur').textContent =
-    'Status: ' + LBL[statuses[id] || 'none'] + (total > 1 ? ` (${done+plan}/${total} segm.${pct})` : '');
-  const nums = houseNums[id] || {};
-  document.getElementById('popup-from').value = nums.from || '';
-  document.getElementById('popup-to').value   = nums.to   || '';
+    LBL[statuses[id] || 'none'] + ' · ' + (done + plan) + '/' + total + ' segm. (' + pct + '%)';
   document.getElementById('popup').style.display = 'block';
 }
+
 function closePop() {
   document.getElementById('popup').style.display = 'none';
   selId = null; selName = null;
@@ -490,16 +443,13 @@ async function setStatus(s) {
   if (!selId) return;
   const id   = selId;
   const name = selName;
-  const from = document.getElementById('popup-from').value || null;
-  const to   = document.getElementById('popup-to').value   || null;
   closePop();
   await fetch('/api/status', {
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({id, name, status:s, house_from:from ? +from : null, house_to:to ? +to : null})
+    body:JSON.stringify({id, name, status:s, house_from:null, house_to:null})
   });
-  statuses[id]  = s;
-  houseNums[id] = { from: from ? +from : null, to: to ? +to : null };
+  statuses[id] = s;
   applyStyle(id);
 }
 
@@ -534,7 +484,7 @@ async function loadStreets() {
     hideLoad();
   } catch (err) {
     document.getElementById('loading').innerHTML =
-      `<p style="color:red;padding:20px">Fout: ${err.message}</p>`;
+      '<p style="color:red;padding:20px">Fout: ' + err.message + '</p>';
   }
 }
 
@@ -566,9 +516,7 @@ function toggleGPS() {
     }, err => {
       const msg = err.code === 1
         ? 'Locatietoegang geweigerd. Gebruik HTTPS of open de app op hetzelfde apparaat via localhost.'
-        : err.code === 2
-          ? 'Locatie niet beschikbaar.'
-          : 'Locatie time-out.';
+        : err.code === 2 ? 'Locatie niet beschikbaar.' : 'Locatie time-out.';
       alert(msg);
       btn.classList.remove('on');
       watchId = null;
@@ -576,7 +524,6 @@ function toggleGPS() {
   }
 }
 
-// --- loading helpers ---
 function showLoad(msg, sub) {
   document.getElementById('load-msg').textContent = msg;
   document.getElementById('load-sub').textContent = sub;
@@ -587,101 +534,108 @@ function hideLoad() { document.getElementById('loading').style.display = 'none';
 // ============================================================
 // STREETS TAB (TAB 2)
 // ============================================================
-async function loadStreetList() {
-  const [markedRes, manualRes] = await Promise.all([
-    fetch('/api/streets-marked'),
-    fetch('/api/manual-streets')
-  ]);
-  const marked = await markedRes.json();
-  const manual = await manualRes.json();
-  const list   = document.getElementById('street-list');
+let streetNames  = [];
+let currentMarked = [];
 
-  if (!marked.length && !manual.length) {
+async function loadStreetNames() {
+  if (streetNames.length) return;  // already loaded
+  const r = await fetch('/api/street-names');
+  streetNames = await r.json();
+  const dl = document.getElementById('street-names-list');
+  dl.innerHTML = streetNames.map(n => '<option value="' + n + '">').join('');
+}
+
+function onStreetInput() {
+  const name = document.getElementById('s-name').value.trim();
+  const msg  = document.getElementById('s-name-msg');
+  if (!name || streetNames.length === 0) { msg.style.display = 'none'; return; }
+  const found = streetNames.some(n => n.toLowerCase() === name.toLowerCase());
+  msg.textContent   = found ? '✓ Straat gevonden' : '✗ Straat niet gevonden in het kaartgebied';
+  msg.style.color   = found ? '#16a34a' : '#ef4444';
+  msg.style.display = 'block';
+}
+
+async function loadStreetList() {
+  const r = await fetch('/api/streets-marked');
+  currentMarked = await r.json();
+  const list = document.getElementById('street-list');
+
+  if (!currentMarked.length) {
     list.innerHTML = '<p class="empty">Nog geen straten toegevoegd</p>';
-    drawManual([]);
     return;
   }
 
-  const markedHtml = marked.map(s => `
-    <div class="si">
-      <div class="sinfo">
-        <div class="sname">🗺 ${s.name || '–'}</div>
-        <div class="smeta">${s.house_from && s.house_to ? `Nr. ${s.house_from}–${s.house_to}` : 'Geen huisnummers'}</div>
-      </div>
-      <span class="sbadge ${s.status==='done'?'bdo2':'bpl2'}">
-        ${s.status==='done'?'✅ Gedaan':'📌 Gepland'}
-      </span>
-      <button class="delbtn" onclick="resetStreet('${s.osm_id}')">×</button>
-    </div>
-  `).join('');
-
-  const manualHtml = manual.map(s => `
-    <div class="si">
-      <div class="sinfo">
-        <div class="sname">${s.name}</div>
-        <div class="smeta">
-          ${s.house_from && s.house_to ? `Nr. ${s.house_from}–${s.house_to}` : 'Geen huisnummers'}
-          ${s.date_done ? ` · ${s.date_done}` : ''}
-        </div>
-      </div>
-      <span class="sbadge ${s.status==='done'?'bdo2':'bpl2'}">
-        ${s.status==='done'?'✅ Gedaan':'📌 Gepland'}
-      </span>
-      <button class="delbtn" onclick="delStreet(${s.id})">×</button>
-    </div>
-  `).join('');
-
-  list.innerHTML = markedHtml + manualHtml;
-  drawManual(manual);
-}
-
-async function resetStreet(osmId) {
-  await fetch('/api/status', {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({id:osmId, status:'none', house_from:null, house_to:null})
-  });
-  statuses[osmId]  = 'none';
-  houseNums[osmId] = {};
-  applyStyle(osmId);
-  loadStreetList();
-}
-
-function drawManual(streets) {
-  Object.values(mLayers).forEach(l => map.removeLayer(l));
-  mLayers = {};
-  streets.forEach(s => {
-    if (!s.geometry) return;
-    try {
-      const layer = L.geoJSON(JSON.parse(s.geometry), {
-        style:{ color:COL[s.status]||'#aaa', weight:5, opacity:.85, dashArray:'7,5' }
-      }).addTo(map);
-      mLayers[s.id] = layer;
-    } catch(e) {}
-  });
+  list.innerHTML = currentMarked.map(function(s, i) {
+    const marked = s.segments_done + s.segments_planned;
+    const badge  = s.status === 'done' ? 'bdo2' : 'bpl2';
+    const label  = s.status === 'done' ? '✅ Gedaan' : '📌 Gepland';
+    return '<div class="si">' +
+      '<div class="sinfo">' +
+        '<div class="sname">🗺 ' + s.name + '</div>' +
+        '<div class="smeta">' + marked + '/' + s.segments_total + ' segm. · ' + s.coverage_pct + '% gedekt</div>' +
+      '</div>' +
+      '<span class="sbadge ' + badge + '">' + label + '</span>' +
+      '<button class="delbtn" onclick="resetByName(' + i + ')">×</button>' +
+    '</div>';
+  }).join('');
 }
 
 async function addStreet() {
-  const name   = document.getElementById('s-name').value.trim();
-  const from   = document.getElementById('s-from').value || null;
-  const to     = document.getElementById('s-to').value   || null;
-  const status = document.getElementById('s-status').value;
-  const dt     = document.getElementById('s-date').value || (status==='done' ? new Date().toISOString().split('T')[0] : null);
+  const nameInput = document.getElementById('s-name');
+  const inputName = nameInput.value.trim();
+  const status    = document.getElementById('s-status').value;
+  const msg       = document.getElementById('s-name-msg');
 
-  if (!name) { alert('Vul een straatnaam in'); return; }
+  if (!inputName) { alert('Vul een straatnaam in'); return; }
 
-  await fetch('/api/manual-streets', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({ name, house_from:from, house_to:to, status, date_done:dt })
+  const canonical = streetNames.find(n => n.toLowerCase() === inputName.toLowerCase());
+  if (!canonical) {
+    msg.textContent   = '✗ Straat niet gevonden. Kies een straat uit het kaartgebied.';
+    msg.style.color   = '#ef4444';
+    msg.style.display = 'block';
+    return;
+  }
+
+  const r = await fetch('/api/mark-by-name', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ name: canonical, status })
+  });
+  const result = await r.json();
+
+  if (!r.ok) {
+    msg.textContent   = result.error || 'Fout bij opslaan';
+    msg.style.color   = '#ef4444';
+    msg.style.display = 'block';
+    return;
+  }
+
+  (result.osm_ids || []).forEach(function(id) {
+    statuses[id] = status;
+    applyStyle(id);
   });
 
-  ['s-name','s-from','s-to','s-date'].forEach(id => document.getElementById(id).value = '');
+  nameInput.value   = '';
+  msg.style.display = 'none';
   loadStreetList();
 }
 
-async function delStreet(id) {
-  if (!confirm('Straat verwijderen?')) return;
-  await fetch('/api/manual-streets/' + id, { method:'DELETE' });
+async function resetByName(idx) {
+  const s = currentMarked[idx];
+  if (!s) return;
+  if (!confirm('Alle segmenten van "' + s.name + '" resetten?')) return;
+
+  const r = await fetch('/api/mark-by-name', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ name: s.name, status: 'none' })
+  });
+  const result = await r.json();
+
+  (result.osm_ids || []).forEach(function(id) {
+    statuses[id] = 'none';
+    applyStyle(id);
+  });
   loadStreetList();
 }
 
@@ -693,15 +647,12 @@ async function loadStats() {
   const s = await r.json();
   const pct = s.total > 0 ? Math.round(s.done / s.total * 100) : 0;
   document.getElementById('st-pct').textContent     = pct + '%';
-  document.getElementById('st-pct-sub').textContent = `${s.done} van ${s.total} straten gedaan`;
+  document.getElementById('st-pct-sub').textContent = s.done + ' van ' + s.total + ' straten gedaan';
   document.getElementById('st-bar').style.width     = pct + '%';
   document.getElementById('st-done').textContent    = s.done;
   document.getElementById('st-pl').textContent      = s.planned;
   document.getElementById('st-tot').textContent     = s.total;
-  document.getElementById('st-huis').textContent    = s.estimated_houses ?? '–';
-  document.getElementById('st-man').textContent     = s.manual_total;
-  document.getElementById('st-man-sub').textContent =
-    `${s.manual_planned} gepland · ${s.manual_done} gedaan`;
+  document.getElementById('st-segpct').textContent  = s.segment_coverage_pct != null ? s.segment_coverage_pct + '%' : '–';
 }
 
 // ============================================================
@@ -728,6 +679,58 @@ def api_streets():
         return jsonify(get_streets_geojson())
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+# --- Street names for autocomplete ---
+@app.route('/api/street-names')
+def api_street_names():
+    gj = load_cache()
+    if not gj:
+        return jsonify([])
+    names = sorted({f['properties']['name'] for f in gj.get('features', [])
+                    if f['properties'].get('name')})
+    return jsonify(names)
+
+# --- Mark all segments of a street by name ---
+@app.route('/api/mark-by-name', methods=['POST'])
+def api_mark_by_name():
+    d      = request.get_json()
+    name   = d.get('name', '').strip()
+    status = d.get('status', 'planned')
+
+    gj = load_cache()
+    if not gj:
+        return jsonify({'error': 'Kaartgegevens niet geladen'}), 400
+
+    matching = [f for f in gj.get('features', [])
+                if f['properties'].get('name', '').lower() == name.lower()]
+    if not matching:
+        return jsonify({'error': 'Straat niet gevonden in het gebied'}), 404
+
+    conn = get_db()
+    for feat in matching:
+        if status == 'none':
+            conn.execute(
+                "UPDATE streets SET status='none', house_from=NULL, house_to=NULL, "
+                "updated_at=CURRENT_TIMESTAMP WHERE osm_id=?",
+                (feat['id'],)
+            )
+        else:
+            conn.execute('''
+                INSERT INTO streets (osm_id, name, status) VALUES (?,?,?)
+                ON CONFLICT(osm_id) DO UPDATE SET
+                    name=excluded.name, status=excluded.status,
+                    house_from=NULL, house_to=NULL,
+                    updated_at=CURRENT_TIMESTAMP
+            ''', (feat['id'], feat['properties']['name'], status))
+    conn.commit()
+    conn.close()
+
+    return jsonify({
+        'ok':      True,
+        'count':   len(matching),
+        'name':    matching[0]['properties']['name'],
+        'osm_ids': [f['id'] for f in matching]
+    })
 
 # --- Street statuses ---
 @app.route('/api/status', methods=['GET'])
@@ -757,16 +760,51 @@ def api_status_post():
     conn.close()
     return jsonify({'ok': True})
 
+# --- Streets marked — grouped by name with segment coverage ---
 @app.route('/api/streets-marked')
 def api_streets_marked():
     conn = get_db()
     rows = conn.execute(
-        "SELECT osm_id, name, status, house_from, house_to FROM streets WHERE status != 'none' ORDER BY name"
+        "SELECT osm_id, name, status FROM streets WHERE status != 'none' AND name IS NOT NULL ORDER BY name"
     ).fetchall()
     conn.close()
-    return jsonify([dict(r) for r in rows])
 
-# --- Manual streets ---
+    by_name = {}
+    for r in rows:
+        n = r['name']
+        if n not in by_name:
+            by_name[n] = {'name': n, 'done': 0, 'planned': 0}
+        if r['status'] == 'done':
+            by_name[n]['done'] += 1
+        else:
+            by_name[n]['planned'] += 1
+
+    # Total segments per street name from cache
+    total_by_name = {}
+    gj = load_cache()
+    if gj:
+        for feat in gj.get('features', []):
+            n = feat['properties'].get('name')
+            if n:
+                total_by_name[n] = total_by_name.get(n, 0) + 1
+
+    result = []
+    for n, data in by_name.items():
+        total  = total_by_name.get(n, data['done'] + data['planned'])
+        marked = data['done'] + data['planned']
+        pct    = round(marked / total * 100) if total > 0 else 0
+        result.append({
+            'name':             n,
+            'status':           'done' if data['planned'] == 0 else 'planned',
+            'segments_done':    data['done'],
+            'segments_planned': data['planned'],
+            'segments_total':   total,
+            'coverage_pct':     pct,
+        })
+
+    return jsonify(sorted(result, key=lambda x: x['name']))
+
+# --- Manual streets (kept for backwards compat) ---
 @app.route('/api/manual-streets', methods=['GET'])
 def api_manual_get():
     conn = get_db()
@@ -778,17 +816,12 @@ def api_manual_get():
 def api_manual_post():
     d    = request.get_json()
     name = d.get('name', '').strip()
-
-    # Try to find geometry in cache
-    geom = find_street_in_cache(name)
-    geom_json = json.dumps(geom) if geom else None
-
     conn = get_db()
     conn.execute('''
-        INSERT INTO manual_streets (name, house_from, house_to, status, date_done, geometry)
-        VALUES (?,?,?,?,?,?)
+        INSERT INTO manual_streets (name, house_from, house_to, status, date_done)
+        VALUES (?,?,?,?,?)
     ''', (name, d.get('house_from'), d.get('house_to'),
-          d.get('status', 'planned'), d.get('date_done'), geom_json))
+          d.get('status', 'planned'), d.get('date_done')))
     conn.commit()
     conn.close()
     return jsonify({'ok': True})
@@ -804,44 +837,27 @@ def api_manual_delete(sid):
 # --- Stats ---
 @app.route('/api/stats')
 def api_stats():
-    # Total unique street names in area
-    total = 0
-    if os.path.exists(CACHE_PATH):
-        with open(CACHE_PATH) as f:
-            gj = json.load(f)
-        total = len({f['properties']['name'] for f in gj.get('features', [])})
+    total          = 0
+    total_segments = 0
+    gj = load_cache()
+    if gj:
+        names          = {f['properties']['name'] for f in gj.get('features', [])}
+        total          = len(names)
+        total_segments = len(gj.get('features', []))
 
     conn = get_db()
     done    = conn.execute("SELECT COUNT(DISTINCT name) FROM streets WHERE status='done' AND name IS NOT NULL").fetchone()[0]
     planned = conn.execute("SELECT COUNT(DISTINCT name) FROM streets WHERE status='planned' AND name IS NOT NULL").fetchone()[0]
-
-    # Manual stats
-    m_done    = conn.execute("SELECT COUNT(*) FROM manual_streets WHERE status='done'").fetchone()[0]
-    m_planned = conn.execute("SELECT COUNT(*) FROM manual_streets WHERE status='planned'").fetchone()[0]
-
-    # Estimate houses from both manual and map streets
-    manual_rows = conn.execute(
-        'SELECT house_from, house_to FROM manual_streets WHERE house_from IS NOT NULL AND house_to IS NOT NULL'
-    ).fetchall()
-    map_rows = conn.execute(
-        'SELECT house_from, house_to FROM streets WHERE house_from IS NOT NULL AND house_to IS NOT NULL'
-    ).fetchall()
+    done_segs = conn.execute("SELECT COUNT(*) FROM streets WHERE status='done'").fetchone()[0]
     conn.close()
 
-    all_rows = list(manual_rows) + list(map_rows)
-    estimated = sum(
-        max(1, (r['house_to'] - r['house_from']) // 2 + 1)
-        for r in all_rows if r['house_to'] and r['house_from'] and r['house_to'] >= r['house_from']
-    )
+    seg_pct = round(done_segs / total_segments * 100) if total_segments > 0 else 0
 
     return jsonify({
-        'total':            total,
-        'done':             done,
-        'planned':          planned,
-        'manual_total':     m_done + m_planned,
-        'manual_done':      m_done,
-        'manual_planned':   m_planned,
-        'estimated_houses': estimated if estimated > 0 else None
+        'total':                total,
+        'done':                 done,
+        'planned':              planned,
+        'segment_coverage_pct': seg_pct,
     })
 
 # --- Cache refresh ---
