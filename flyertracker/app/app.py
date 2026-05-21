@@ -965,5 +965,10 @@ def ensure_ssl_cert():
 
 if __name__ == '__main__':
     init_db()
-    print('Starting on http://0.0.0.0:8099')
-    app.run(host='0.0.0.0', port=8099, debug=False, threaded=True)
+    ssl_context = ensure_ssl_cert()
+    if ssl_context:
+        print('Starting on https://0.0.0.0:8099')
+        app.run(host='0.0.0.0', port=8099, debug=False, threaded=True, ssl_context=ssl_context)
+    else:
+        print('Starting on http://0.0.0.0:8099')
+        app.run(host='0.0.0.0', port=8099, debug=False, threaded=True)
