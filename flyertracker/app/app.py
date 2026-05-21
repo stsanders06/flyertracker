@@ -250,6 +250,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:
 .pfill{height:100%;background:#16a34a;border-radius:5px;transition:width .5s}
 .sgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .sgrid .stcard{margin:0}
+
+/* GPS street bar */
+#gps-bar{position:fixed;bottom:56px;left:0;right:0;background:#1565c0;color:#fff;padding:9px 14px;display:none;align-items:center;gap:8px;z-index:1500;font-size:13px;box-shadow:0 -2px 8px rgba(0,0,0,.2)}
+#gps-bar .gs{flex:1;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gbtn{padding:5px 11px;border:none;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer;flex-shrink:0}
 </style>
 </head>
 <body>
@@ -358,6 +363,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:
   </div>
 </div>
 
+<!-- GPS bar -->
+<div id="gps-bar">
+  <span class="gs" id="gps-street">–</span>
+  <button class="gbtn" style="background:#f59e0b" onclick="markDetectedStreet('planned')">📌 Plannen</button>
+  <button class="gbtn" style="background:#16a34a" onclick="markDetectedStreet('done')">✅ Gedaan</button>
+</div>
+
 <!-- Loading -->
 <div id="loading">
   <div class="spin"></div>
@@ -396,13 +408,16 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution:'© OpenStreetMap', maxZoom:19
 }).addTo(map);
 
-let sLayers    = {};  // osm_id → {vis, hit}
-let statuses   = {};  // osm_id → status string
-let segsByName = {};  // street name → [osm_id, ...]
-let selId      = null;
-let selName    = null;
-let locMark    = null;
-let watchId    = null;
+let sLayers      = {};  // osm_id → {vis, hit}
+let statuses     = {};  // osm_id → status string
+let segsByName   = {};  // street name → [osm_id, ...]
+let allFeatures  = [];  // all GeoJSON features for GPS detection
+let selId        = null;
+let selName      = null;
+let locMark      = null;
+let watchId      = null;
+let detectedId   = null;
+let detectedName = null;
 
 async function loadStatuses() {
   const r   = await fetch('/api/status');
@@ -463,8 +478,9 @@ async function loadStreets() {
     if (gj.error) throw new Error(gj.error);
 
     Object.values(sLayers).forEach(l => { map.removeLayer(l.vis); map.removeLayer(l.hit); });
-    sLayers    = {};
-    segsByName = {};
+    sLayers     = {};
+    segsByName  = {};
+    allFeatures = gj.features;
 
     gj.features.forEach(f => {
       const id   = f.id;
@@ -495,6 +511,8 @@ function toggleGPS() {
     navigator.geolocation.clearWatch(watchId);
     watchId = null;
     if (locMark) { map.removeLayer(locMark); locMark = null; }
+    document.getElementById('gps-bar').style.display = 'none';
+    detectedId = null; detectedName = null;
     btn.classList.remove('on');
   } else {
     btn.classList.add('on');
@@ -513,6 +531,7 @@ function toggleGPS() {
       } else {
         locMark.setLatLng([lat,lng]);
       }
+      updateGpsBar(lat, lng);
     }, err => {
       const msg = err.code === 1
         ? 'Locatietoegang geweigerd. Gebruik HTTPS of open de app op hetzelfde apparaat via localhost.'
@@ -522,6 +541,48 @@ function toggleGPS() {
       watchId = null;
     }, { enableHighAccuracy:true });
   }
+}
+
+function pointToSegDist(lat, lng, lat1, lng1, lat2, lng2) {
+  const R = 6371000, rad = Math.PI / 180;
+  const scaleX = Math.cos((lat1 + lat2) / 2 * rad);
+  const dy = (lat2 - lat1) * R * rad, dx = (lng2 - lng1) * R * rad * scaleX;
+  const py = (lat  - lat1) * R * rad, px = (lng  - lng1) * R * rad * scaleX;
+  const len2 = dx*dx + dy*dy;
+  const t = len2 > 0 ? Math.max(0, Math.min(1, (px*dx + py*dy) / len2)) : 0;
+  return Math.sqrt((px - t*dx)**2 + (py - t*dy)**2);
+}
+
+function updateGpsBar(lat, lng) {
+  let bestId = null, bestName = null, bestDist = 30;
+  for (const f of allFeatures) {
+    const c = f.geometry.coordinates;
+    for (let i = 0; i < c.length - 1; i++) {
+      const d = pointToSegDist(lat, lng, c[i][1], c[i][0], c[i+1][1], c[i+1][0]);
+      if (d < bestDist) { bestDist = d; bestId = f.id; bestName = f.properties.name; }
+    }
+  }
+  const bar = document.getElementById('gps-bar');
+  if (bestId) {
+    detectedId   = bestId;
+    detectedName = bestName;
+    document.getElementById('gps-street').textContent = '📍 ' + bestName;
+    bar.style.display = 'flex';
+  } else {
+    detectedId = null; detectedName = null;
+    bar.style.display = 'none';
+  }
+}
+
+async function markDetectedStreet(status) {
+  if (!detectedName) return;
+  const r = await fetch('/api/mark-by-name', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ name: detectedName, status })
+  });
+  const result = await r.json();
+  (result.osm_ids || []).forEach(id => { statuses[id] = status; applyStyle(id); });
 }
 
 function showLoad(msg, sub) {
