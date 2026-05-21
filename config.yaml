@@ -4,7 +4,7 @@ version: "1.0.0"
 slug: "flyertracker"
 url: "https://github.com/stsanders06/flyertracker"
 init: false
-startup: application
+startup: services
 boot: auto
 arch:
   - aarch64
