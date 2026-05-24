@@ -131,20 +131,22 @@ def angle_between_points(p1, p2, p3):
     return math.degrees(math.acos(cos_angle))
 
 def split_ways_to_segments(gj):
-    """Split OSM ways at intersections and 90° turns into segments."""
+    """Split OSM ways at intersections, T-junctions, and 90° turns into segments."""
     ways = gj.get('features', [])
     if not ways:
         return {'type': 'FeatureCollection', 'features': []}
 
-    node_to_ways = defaultdict(set)
+    all_coords = defaultdict(set)
     for way_idx, way in enumerate(ways):
         coords = way['geometry']['coordinates']
         if len(coords) < 2:
             continue
-        node_to_ways[tuple(coords[0])].add(way_idx)
-        node_to_ways[tuple(coords[-1])].add(way_idx)
-
-    intersections = {node for node, way_set in node_to_ways.items() if len(way_set) > 1}
+        for i, coord in enumerate(coords):
+            coord_tuple = tuple(coord)
+            if i == 0 or i == len(coords) - 1:
+                all_coords[coord_tuple].add(('endpoint', way_idx))
+            else:
+                all_coords[coord_tuple].add(('intermediate', way_idx))
 
     segments = []
     for way in ways:
@@ -155,11 +157,13 @@ def split_ways_to_segments(gj):
         split_indices = [0]
 
         for i in range(1, len(coords) - 1):
-            node = tuple(coords[i])
-            is_intersection = node in intersections
+            coord_tuple = tuple(coords[i])
+            coord_info = all_coords.get(coord_tuple, set())
+
+            is_junction = any(way_id != way['id'] for _, way_id in coord_info)
             is_sharp_turn = angle_between_points(coords[i-1], coords[i], coords[i+1]) < 100
 
-            if is_intersection or is_sharp_turn:
+            if is_junction or is_sharp_turn:
                 split_indices.append(i)
 
         split_indices.append(len(coords) - 1)
