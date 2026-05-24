@@ -981,7 +981,7 @@ async function loadStats() {
   const s     = computeStats();
   const total = s.doneSegs + s.plannedSegs;
   const pct   = total > 0 ? Math.round(s.doneSegs / total * 100) : 0;
-  const houses = Math.round(s.doneM * 0.25 / 5) * 5;
+  const houses = Math.round(s.doneM * 0.05 / 5) * 5;
   const km     = (s.doneM / 1000).toFixed(1);
 
   document.getElementById('st-houses').textContent   = houses > 0 ? '~' + houses : '–';
