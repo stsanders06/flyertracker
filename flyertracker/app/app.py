@@ -255,6 +255,17 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:
 #gps-bar{position:fixed;bottom:56px;left:0;right:0;background:#1565c0;color:#fff;padding:9px 14px;display:none;align-items:center;gap:8px;z-index:1500;font-size:13px;box-shadow:0 -2px 8px rgba(0,0,0,.2)}
 #gps-bar .gs{flex:1;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .gbtn{padding:5px 11px;border:none;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer;flex-shrink:0}
+
+/* Bulk modal */
+#bulk-modal{position:fixed;bottom:0;left:0;right:0;background:#fff;border-radius:16px 16px 0 0;padding:17px 18px 28px;box-shadow:0 -4px 20px rgba(0,0,0,.15);z-index:2000;display:none;max-height:80vh;overflow-y:auto}
+#bulk-modal h3{font-size:14px;font-weight:700;color:#333;margin-bottom:12px}
+#bulk-modal textarea{width:100%;height:120px;padding:10px;border:1px solid #e0e0e0;border-radius:8px;font-size:13px;font-family:monospace;resize:vertical;outline:none}
+#bulk-modal textarea:focus{border-color:#1565c0}
+#bulk-modal-results{margin-top:14px;display:none}
+.bulk-summary{font-size:13px;font-weight:600;margin-bottom:10px}
+.bulk-notfound{font-size:12px;color:#888;margin-top:8px;max-height:120px;overflow-y:auto;padding:8px;background:#f9f9f9;border-radius:6px}
+.bulk-notfound div{padding:2px 0}
+#xbulk{position:absolute;top:13px;right:16px;font-size:21px;color:#bbb;cursor:pointer}
 </style>
 </head>
 <body>
@@ -289,6 +300,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:
           </div>
         </div>
         <button class="btnp" style="width:100%;padding:11px;background:#1565c0;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer" onclick="addStreet()">Toevoegen</button>
+      </div>
+
+      <div class="card">
+        <h3>🗑️ Bulk toevoegen</h3>
+        <p style="font-size:12px;color:#999;margin-bottom:10px">Plak meerdere straatnamen (per regel of komma-gescheiden)</p>
+        <button class="btnp" style="width:100%;padding:11px;background:#8b5cf6;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer" onclick="openBulkModal()">Modal openen</button>
       </div>
 
       <div class="card">
@@ -368,6 +385,22 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:
   <span class="gs" id="gps-street">–</span>
   <button class="gbtn" style="background:#f59e0b" onclick="markDetectedStreet('planned')">📌 Plannen</button>
   <button class="gbtn" style="background:#16a34a" onclick="markDetectedStreet('done')">✅ Gedaan</button>
+</div>
+
+<!-- Bulk modal -->
+<div id="bulk-modal">
+  <span id="xbulk" onclick="closeBulkModal()">✕</span>
+  <h3>🗑️ Bulk straten toevoegen</h3>
+  <textarea id="bulk-input" placeholder="Kerkstraat&#10;Ringlaan&#10;Marktplein"></textarea>
+  <div class="brow" style="margin-top:14px">
+    <button class="btn bpl" onclick="processBulkAdd()">✅ Toevoegen</button>
+    <button class="btn bno" onclick="closeBulkModal()">Annuleren</button>
+  </div>
+  <div id="bulk-modal-results">
+    <div class="bulk-summary" id="bulk-summary"></div>
+    <button id="bulk-toggle-notfound" style="font-size:11px;color:#1565c0;background:none;border:none;cursor:pointer;text-decoration:underline;display:none" onclick="toggleBulkNotFound()">Toon niet gevonden</button>
+    <div class="bulk-notfound" id="bulk-notfound" style="display:none"></div>
+  </div>
 </div>
 
 <!-- Loading -->
@@ -583,6 +616,73 @@ async function markDetectedStreet(status) {
   });
   statuses[detectedId] = status;
   applyStyle(detectedId);
+}
+
+// --- Bulk add ---
+function openBulkModal() {
+  document.getElementById('bulk-modal').style.display = 'block';
+  document.getElementById('bulk-input').value = '';
+  document.getElementById('bulk-modal-results').style.display = 'none';
+  document.getElementById('bulk-notfound').style.display = 'none';
+  document.getElementById('bulk-toggle-notfound').style.display = 'none';
+}
+
+function closeBulkModal() {
+  document.getElementById('bulk-modal').style.display = 'none';
+}
+
+async function processBulkAdd() {
+  const input = document.getElementById('bulk-input').value.trim();
+  if (!input) { alert('Vul straten in'); return; }
+
+  const lines = input.split(/[\n,;]/).map(s => s.trim()).filter(s => s && s.length > 0);
+  if (lines.length === 0) { alert('Geen straten gevonden'); return; }
+
+  const unique = [...new Set(lines)];
+  const valid = [];
+  const notfound = [];
+
+  for (const line of unique) {
+    const canonical = streetNames.find(n => n.toLowerCase() === line.toLowerCase());
+    if (canonical) valid.push(canonical);
+    else notfound.push(line);
+  }
+
+  if (valid.length === 0) {
+    document.getElementById('bulk-summary').textContent = '❌ Geen straten gevonden';
+    document.getElementById('bulk-modal-results').style.display = 'block';
+    return;
+  }
+
+  let added = 0;
+  for (const name of valid) {
+    try {
+      const r = await fetch('/api/mark-by-name', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ name, status: 'planned' })
+      });
+      const result = await r.json();
+      if (r.ok) {
+        added += 1;
+        (result.osm_ids || []).forEach(id => { statuses[id] = 'planned'; applyStyle(id); });
+      }
+    } catch (e) {}
+  }
+
+  const summary = `✅ ${added} toegevoegd` + (notfound.length > 0 ? ` · ❌ ${notfound.length} niet gevonden` : '');
+  document.getElementById('bulk-summary').textContent = summary;
+  if (notfound.length > 0) {
+    document.getElementById('bulk-notfound').innerHTML = notfound.map(n => '<div>• ' + n + '</div>').join('');
+    document.getElementById('bulk-toggle-notfound').style.display = 'inline';
+  }
+  document.getElementById('bulk-modal-results').style.display = 'block';
+  loadStreetList();
+}
+
+function toggleBulkNotFound() {
+  const el = document.getElementById('bulk-notfound');
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
 }
 
 function showLoad(msg, sub) {
