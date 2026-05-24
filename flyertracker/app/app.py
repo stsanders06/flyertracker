@@ -21,7 +21,7 @@ DEFAULT_CENTER = [51.35, 6.15]
 DEFAULT_ZOOM   = 12
 
 HEADERS = {'User-Agent': 'HogedrukVenlo/1.0 (flyertracker)'}
-VERSION = "2.0.0"
+VERSION = "2.0.3"
 
 # ---------------------------------------------------------------------------
 # Database
