@@ -21,6 +21,7 @@ DEFAULT_CENTER = [51.35, 6.15]
 DEFAULT_ZOOM   = 12
 
 HEADERS = {'User-Agent': 'HogedrukVenlo/1.0 (flyertracker)'}
+VERSION = "2.0.0"
 
 # ---------------------------------------------------------------------------
 # Database
@@ -257,7 +258,7 @@ HTML = r"""<!DOCTYPE html>
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:flex;flex-direction:column;height:100vh;height:100dvh;background:#f4f4f4;overflow:hidden}
 
 /* Header */
-#hdr{background:#1565c0;color:#fff;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;z-index:100}
+#hdr{background:#1565c0;color:#fff;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;z-index:100;position:relative}
 #hdr h1{font-size:14px;font-weight:700}
 
 /* Content */
@@ -354,7 +355,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:
 </head>
 <body>
 
-<div id="hdr"><h1>📋 Flyer Tracker – Hogedruk Venlo</h1></div>
+<div id="hdr"><h1>📋 Flyer Tracker – Hogedruk Venlo</h1><span style="position:absolute;right:14px;top:50%;transform:translateY(-50%);font-size:11px;color:#aaa">v{{ version }}</span></div>
 
 <div id="content">
 
@@ -915,7 +916,7 @@ loadStreets();
 
 @app.route('/')
 def index():
-    return render_template_string(HTML)
+    return render_template_string(HTML, version=VERSION)
 
 # --- OSM streets ---
 @app.route('/api/streets')
