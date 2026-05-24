@@ -21,7 +21,7 @@ DEFAULT_CENTER = [51.35, 6.15]
 DEFAULT_ZOOM   = 12
 
 HEADERS      = {'User-Agent': 'HogedrukVenlo/1.0 (flyertracker)'}
-VERSION      = "2.0.5"
+VERSION      = "2.0.7"
 CACHE_VERSION = "4"  # bump when segmentation logic changes to force cache rebuild
 MIN_SEGMENT_METERS = 20  # segments shorter than this are merged into their neighbour
 
@@ -295,11 +295,16 @@ HTML = r"""<!DOCTYPE html>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:flex;flex-direction:column;height:100vh;height:100dvh;background:#f4f4f4;overflow:hidden}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;display:flex;flex-direction:column;height:100vh;height:100dvh;background:#f0f2f5;overflow:hidden}
 
 /* Header */
-#hdr{background:#1565c0;color:#fff;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;z-index:100;position:relative}
-#hdr h1{font-size:14px;font-weight:700}
+#hdr{background:#1565c0;color:#fff;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;z-index:100}
+#hdr-title{font-size:16px;font-weight:700;letter-spacing:-.3px}
+#hdr-sub{font-size:10px;color:rgba(255,255,255,.5);margin-top:1px}
+#hdr-right{display:flex;align-items:center;gap:8px}
+#hdr-ver{font-size:10px;color:rgba(255,255,255,.38)}
+#hdr-reset{background:rgba(255,255,255,.13);border:none;color:rgba(255,255,255,.75);width:32px;height:32px;border-radius:9px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+#hdr-reset:active{background:rgba(255,255,255,.22)}
 
 /* Content */
 #content{flex:1;overflow:hidden;position:relative}
@@ -307,95 +312,109 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:
 .tab.on{display:flex}
 
 /* Bottom nav */
-#nav{display:flex;background:#fff;border-top:1px solid #e0e0e0;flex-shrink:0}
-.nb{flex:1;padding:9px 4px 7px;border:none;background:none;cursor:pointer;font-size:10px;color:#999;display:flex;flex-direction:column;align-items:center;gap:3px}
-.nb .ic{font-size:21px;line-height:1}
+#nav{display:flex;background:#fff;border-top:1px solid #e8eaed;flex-shrink:0}
+.nb{flex:1;padding:9px 4px 9px;border:none;background:none;cursor:pointer;font-size:10px;color:#94a3b8;display:flex;flex-direction:column;align-items:center;gap:4px;font-weight:500;transition:color .15s}
+.nb svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
 .nb.on{color:#1565c0}
 
 /* Map */
 #map{flex:1}
 
 /* GPS button */
-#gpsbtn{position:fixed;bottom:76px;left:10px;width:42px;height:42px;background:#fff;border:2px solid #ccc;border-radius:50%;font-size:19px;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.2);z-index:1000}
-#gpsbtn.on{border-color:#1565c0}
+#gpsbtn{position:fixed;bottom:76px;left:12px;width:44px;height:44px;background:#fff;border:none;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 14px rgba(0,0,0,.18);z-index:1000;color:#64748b;transition:bottom .2s ease,color .2s,box-shadow .2s}
+#gpsbtn.on{color:#1565c0;box-shadow:0 2px 14px rgba(21,101,192,.35)}
 
 /* Legend */
-#legend{position:fixed;bottom:70px;right:8px;background:#fff;border-radius:9px;padding:7px 11px;box-shadow:0 2px 10px rgba(0,0,0,.18);z-index:1000;font-size:11px;line-height:1.9}
-#legend div{display:flex;align-items:center;gap:7px}
-.ll{width:17px;height:3px;border-radius:2px;flex-shrink:0}
+#legend{position:fixed;bottom:70px;right:10px;background:#fff;border-radius:12px;padding:8px 13px;box-shadow:0 2px 14px rgba(0,0,0,.1);z-index:1000;font-size:11px;line-height:2;color:#374151}
+#legend div{display:flex;align-items:center;gap:8px}
+.ll{width:18px;height:3px;border-radius:2px;flex-shrink:0}
 
 /* Street popup */
-#popup{position:fixed;bottom:0;left:0;right:0;background:#fff;border-radius:16px 16px 0 0;padding:17px 18px 28px;box-shadow:0 -4px 20px rgba(0,0,0,.15);z-index:2000;display:none}
-#popup-name{font-size:16px;font-weight:700;margin-bottom:3px}
-#popup-cur{font-size:12px;color:#888;margin-bottom:14px}
-#xpop{position:absolute;top:13px;right:16px;font-size:21px;color:#bbb;cursor:pointer}
+#popup{position:fixed;bottom:0;left:0;right:0;background:#fff;border-radius:20px 20px 0 0;padding:18px 18px 32px;box-shadow:0 -4px 24px rgba(0,0,0,.12);z-index:2000;display:none}
+#popup-name{font-size:17px;font-weight:700;margin-bottom:3px;color:#111}
+#popup-cur{font-size:12px;color:#94a3b8;margin-bottom:16px}
+#xpop{position:absolute;top:14px;right:16px;font-size:20px;color:#d1d5db;cursor:pointer;line-height:1}
 .brow{display:flex;gap:8px}
-.btn{flex:1;padding:11px 6px;border:none;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer}
-.btn:active{filter:brightness(.88)}
+.btn{flex:1;padding:13px 6px;border:none;border-radius:12px;font-size:13px;font-weight:700;cursor:pointer;letter-spacing:.1px}
+.btn:active{filter:brightness(.9)}
 .bpl{background:#f59e0b;color:#fff}
 .bdo{background:#16a34a;color:#fff}
-.bno{background:#e5e7eb;color:#555}
+.bno{background:#f1f5f9;color:#64748b}
 
 /* Loading */
-#loading{position:fixed;inset:0;background:rgba(255,255,255,.93);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:5000}
-#loading p{margin-top:13px;font-size:14px;color:#444}
-#loading small{margin-top:5px;font-size:12px;color:#aaa}
-.spin{width:38px;height:38px;border:4px solid #e5e5e5;border-top-color:#1565c0;border-radius:50%;animation:sp .75s linear infinite}
+#loading{position:fixed;inset:0;background:rgba(255,255,255,.95);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:5000}
+#loading p{margin-top:15px;font-size:14px;color:#374151;font-weight:500}
+#loading small{margin-top:5px;font-size:12px;color:#94a3b8}
+.spin{width:36px;height:36px;border:3px solid #e2e8f0;border-top-color:#1565c0;border-radius:50%;animation:sp .7s linear infinite}
 @keyframes sp{to{transform:rotate(360deg)}}
 
 /* Tab 2 – Straten */
 #streets-scroll{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:10px}
-.card{background:#fff;border-radius:12px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.07)}
-.card h3{font-size:13px;font-weight:700;color:#333;margin-bottom:11px}
+.card{background:#fff;border-radius:14px;padding:14px;box-shadow:0 1px 6px rgba(0,0,0,.06)}
+.card h3{font-size:13px;font-weight:700;color:#1e293b;margin-bottom:11px;letter-spacing:-.1px}
 .frow{display:flex;gap:8px;margin-bottom:9px}
 .fcol{display:flex;flex-direction:column;gap:3px;flex:1}
-.fcol label{font-size:10px;color:#aaa;font-weight:600;letter-spacing:.3px}
-.fcol input,.fcol select{padding:8px 10px;border:1px solid #e0e0e0;border-radius:8px;font-size:14px;outline:none;width:100%;background:#fff}
+.fcol label{font-size:10px;color:#94a3b8;font-weight:700;letter-spacing:.5px;text-transform:uppercase}
+.fcol input,.fcol select{padding:9px 10px;border:1.5px solid #e2e8f0;border-radius:9px;font-size:14px;outline:none;width:100%;background:#fff;color:#111}
 .fcol input:focus,.fcol select:focus{border-color:#1565c0}
-.si{border:1px solid #f0f0f0;border-radius:10px;padding:11px;margin-bottom:7px;display:flex;align-items:flex-start;gap:8px}
+.si{border:1.5px solid #f1f5f9;border-radius:12px;padding:11px;margin-bottom:7px;display:flex;align-items:flex-start;gap:8px}
 .si:last-child{margin-bottom:0}
 .sinfo{flex:1}
-.sname{font-weight:700;font-size:14px;color:#222}
-.smeta{font-size:11px;color:#999;margin-top:2px}
+.sname{font-weight:700;font-size:14px;color:#1e293b}
+.smeta{font-size:11px;color:#94a3b8;margin-top:2px}
 .sbadge{padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;flex-shrink:0;white-space:nowrap}
 .bpl2{background:#fef3c7;color:#92400e}
 .bdo2{background:#dcfce7;color:#166534}
-.delbtn{background:none;border:none;color:#ccc;font-size:18px;cursor:pointer;padding:0 3px;flex-shrink:0}
+.delbtn{background:none;border:none;color:#cbd5e1;font-size:18px;cursor:pointer;padding:0 3px;flex-shrink:0}
 .delbtn:hover{color:#ef4444}
-.empty{color:#bbb;font-size:13px;text-align:center;padding:18px}
+.empty{color:#94a3b8;font-size:13px;text-align:center;padding:22px}
 .vmsg{font-size:11px;margin-top:3px}
 
 /* Tab 3 – Stats */
-#stats-scroll{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:10px}
-.stcard{background:#fff;border-radius:12px;padding:15px;box-shadow:0 1px 4px rgba(0,0,0,.07)}
-.sttitle{font-size:11px;color:#aaa;font-weight:600;margin-bottom:5px;letter-spacing:.3px}
-.stval{font-size:28px;font-weight:800}
-.stsub{font-size:12px;color:#bbb;margin-top:2px}
-.pbar{height:10px;background:#f0f0f0;border-radius:5px;overflow:hidden;margin-top:10px}
-.pfill{height:100%;background:#16a34a;border-radius:5px;transition:width .5s}
-.sgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.sgrid .stcard{margin:0}
+#stats-scroll{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:12px}
+.stcard{background:#fff;border-radius:16px;padding:18px;box-shadow:0 2px 10px rgba(0,0,0,.05)}
+.st-hero{text-align:center;padding:28px 18px 22px}
+.st-hero-num{font-size:56px;font-weight:800;letter-spacing:-2px;line-height:1;color:#111}
+.st-hero-lbl{font-size:13px;color:#6b7280;margin-top:9px;font-weight:500}
+.st-hero-sub{font-size:11px;color:#9ca3af;margin-top:4px}
+.stgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.stgrid .stcard{padding:14px 16px}
+.sttitle{font-size:10px;color:#9ca3af;font-weight:700;letter-spacing:.6px;text-transform:uppercase;margin-bottom:6px}
+.stval{font-size:28px;font-weight:800;letter-spacing:-.5px;line-height:1.1}
+.stsub{font-size:11px;color:#9ca3af;margin-top:3px}
+.pbar-hdr{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
+.pbar-lbl{font-size:13px;color:#374151;font-weight:600}
+.pbar-pct{font-size:20px;font-weight:800;color:#16a34a}
+.pbar{height:8px;background:#f1f5f9;border-radius:4px;overflow:hidden}
+.pfill{height:100%;background:linear-gradient(90deg,#16a34a,#22c55e);border-radius:4px;transition:width .6s ease}
+.pbar-sub{font-size:11px;color:#9ca3af;margin-top:7px}
 
 /* GPS street bar */
-#gps-bar{position:fixed;bottom:56px;left:0;right:0;background:#1565c0;color:#fff;padding:9px 14px;display:none;align-items:center;gap:8px;z-index:1500;font-size:13px;box-shadow:0 -2px 8px rgba(0,0,0,.2)}
+#gps-bar{position:fixed;bottom:56px;left:0;right:0;background:#1565c0;color:#fff;padding:10px 14px;display:none;align-items:center;gap:8px;z-index:1500;font-size:13px;box-shadow:0 -2px 12px rgba(21,101,192,.3)}
 #gps-bar .gs{flex:1;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.gbtn{padding:5px 11px;border:none;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer;flex-shrink:0}
+.gbtn{padding:6px 13px;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;flex-shrink:0}
 
 /* Bulk modal */
-#bulk-modal{position:fixed;bottom:0;left:0;right:0;background:#fff;border-radius:16px 16px 0 0;padding:17px 18px 28px;box-shadow:0 -4px 20px rgba(0,0,0,.15);z-index:2000;display:none;max-height:80vh;overflow-y:auto}
-#bulk-modal h3{font-size:14px;font-weight:700;color:#333;margin-bottom:12px}
-#bulk-modal textarea{width:100%;height:120px;padding:10px;border:1px solid #e0e0e0;border-radius:8px;font-size:13px;font-family:monospace;resize:vertical;outline:none}
+#bulk-modal{position:fixed;bottom:0;left:0;right:0;background:#fff;border-radius:20px 20px 0 0;padding:18px 18px 32px;box-shadow:0 -4px 24px rgba(0,0,0,.12);z-index:2000;display:none;max-height:80vh;overflow-y:auto}
+#bulk-modal h3{font-size:15px;font-weight:700;color:#1e293b;margin-bottom:12px}
+#bulk-modal textarea{width:100%;height:120px;padding:10px;border:1.5px solid #e2e8f0;border-radius:10px;font-size:13px;font-family:monospace;resize:vertical;outline:none}
 #bulk-modal textarea:focus{border-color:#1565c0}
 #bulk-modal-results{margin-top:14px;display:none}
 .bulk-summary{font-size:13px;font-weight:600;margin-bottom:10px}
-.bulk-notfound{font-size:12px;color:#888;margin-top:8px;max-height:120px;overflow-y:auto;padding:8px;background:#f9f9f9;border-radius:6px}
+.bulk-notfound{font-size:12px;color:#6b7280;margin-top:8px;max-height:120px;overflow-y:auto;padding:8px;background:#f8fafc;border-radius:8px}
 .bulk-notfound div{padding:2px 0}
-#xbulk{position:absolute;top:13px;right:16px;font-size:21px;color:#bbb;cursor:pointer}
+#xbulk{position:absolute;top:14px;right:16px;font-size:20px;color:#d1d5db;cursor:pointer;line-height:1}
 </style>
 </head>
 <body>
 
-<div id="hdr"><h1>📋 Flyer Tracker – Hogedruk Venlo</h1><div style="position:absolute;right:14px;top:50%;transform:translateY(-50%);display:flex;align-items:center;gap:10px"><span style="font-size:11px;color:#aaa">v{{ version }}</span><button onclick="resetStreets()" style="background:none;border:none;color:#aaa;font-size:17px;cursor:pointer;padding:2px" title="Reset alle straten">🗑</button></div></div>
+<div id="hdr">
+  <div><div id="hdr-title">Flyer Tracker</div><div id="hdr-sub">Hogedruk Venlo</div></div>
+  <div id="hdr-right">
+    <span id="hdr-ver">v{{ version }}</span>
+    <button id="hdr-reset" onclick="resetStreets()" title="Reset alle straten"><svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg></button>
+  </div>
+</div>
 
 <div id="content">
 
@@ -408,7 +427,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:
   <div class="tab" id="tab-streets">
     <div id="streets-scroll">
       <div class="card">
-        <h3>➕ Straat toevoegen</h3>
+        <h3>Straat toevoegen</h3>
         <div class="frow">
           <div class="fcol" style="flex:2">
             <label>STRAATNAAM</label>
@@ -419,8 +438,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:
           <div class="fcol">
             <label>STATUS</label>
             <select id="s-status">
-              <option value="planned">📌 Gepland</option>
-              <option value="done">✅ Gedaan</option>
+              <option value="planned">Plannen</option>
+              <option value="done">Gedaan</option>
             </select>
           </div>
         </div>
@@ -428,13 +447,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:
       </div>
 
       <div class="card">
-        <h3>🗑️ Bulk toevoegen</h3>
+        <h3>Bulk toevoegen</h3>
         <p style="font-size:12px;color:#999;margin-bottom:10px">Plak meerdere straatnamen (per regel of komma-gescheiden)</p>
         <button class="btnp" style="width:100%;padding:11px;background:#8b5cf6;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer" onclick="openBulkModal()">Modal openen</button>
       </div>
 
       <div class="card">
-        <h3>📋 Overzicht</h3>
+        <h3>Overzicht</h3>
         <div id="street-list"><p class="empty">Nog geen straten toegevoegd</p></div>
       </div>
     </div>
@@ -443,32 +462,39 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:
   <!-- TAB 3: STATISTIEKEN -->
   <div class="tab" id="tab-stats">
     <div id="stats-scroll">
-      <div class="stcard">
-        <div class="sttitle">VOORTGANG STRATEN</div>
-        <div class="stval" id="st-pct" style="color:#1565c0">–%</div>
-        <div class="stsub" id="st-pct-sub">–</div>
-        <div class="pbar"><div class="pfill" id="st-bar" style="width:0%"></div></div>
+      <div class="stcard st-hero">
+        <div class="st-hero-num" id="st-houses">–</div>
+        <div class="st-hero-lbl">geschatte woningen bereikt</div>
+        <div class="st-hero-sub" id="st-km-lbl">–</div>
       </div>
-      <div class="sgrid">
+      <div class="stcard">
+        <div class="pbar-hdr">
+          <span class="pbar-lbl">Eigen voortgang</span>
+          <span class="pbar-pct" id="st-pct">–%</span>
+        </div>
+        <div class="pbar"><div class="pfill" id="st-bar" style="width:0%"></div></div>
+        <div class="pbar-sub" id="st-plan-sub">–</div>
+      </div>
+      <div class="stgrid">
         <div class="stcard">
-          <div class="sttitle">GEDAAN</div>
+          <div class="sttitle">Gedaan</div>
           <div class="stval" id="st-done" style="color:#16a34a">–</div>
           <div class="stsub">straten</div>
         </div>
         <div class="stcard">
-          <div class="sttitle">GEPLAND</div>
-          <div class="stval" id="st-pl" style="color:#f59e0b">–</div>
-          <div class="stsub">straten</div>
+          <div class="sttitle">Gepland</div>
+          <div class="stval" id="st-pl" style="color:#d97706">–</div>
+          <div class="stsub">nog te doen</div>
         </div>
         <div class="stcard">
-          <div class="sttitle">TOTAAL IN GEBIED</div>
-          <div class="stval" id="st-tot" style="color:#1565c0">–</div>
-          <div class="stsub">straten</div>
+          <div class="sttitle">Geflyerd</div>
+          <div class="stval" id="st-km" style="color:#1565c0">–</div>
+          <div class="stsub">kilometer</div>
         </div>
         <div class="stcard">
-          <div class="sttitle">SEGMENTDEKKING</div>
-          <div class="stval" id="st-segpct" style="color:#7c3aed">–</div>
-          <div class="stsub">% segmenten gedaan</div>
+          <div class="sttitle">Segmenten</div>
+          <div class="stval" id="st-segs" style="color:#7c3aed">–</div>
+          <div class="stsub">gedaan</div>
         </div>
       </div>
     </div>
@@ -478,13 +504,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:
 
 <!-- Bottom nav -->
 <div id="nav">
-  <button class="nb on" id="nb-map"     onclick="goTab('map')">    <span class="ic">🗺</span>Kaart</button>
-  <button class="nb"    id="nb-streets" onclick="goTab('streets')"><span class="ic">📋</span>Straten</button>
-  <button class="nb"    id="nb-stats"   onclick="goTab('stats')">  <span class="ic">📊</span>Statistieken</button>
+  <button class="nb on" id="nb-map" onclick="goTab('map')"><svg viewBox="0 0 24 24"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>Kaart</button>
+  <button class="nb" id="nb-streets" onclick="goTab('streets')"><svg viewBox="0 0 24 24"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>Straten</button>
+  <button class="nb" id="nb-stats" onclick="goTab('stats')"><svg viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/><line x1="2" y1="20" x2="22" y2="20"/></svg>Statistieken</button>
 </div>
 
 <!-- GPS btn -->
-<button id="gpsbtn" onclick="toggleGPS()">📍</button>
+<button id="gpsbtn" onclick="toggleGPS()"><svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/></svg></button>
 
 <!-- Legend -->
 <div id="legend">
@@ -499,23 +525,23 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:
   <div id="popup-name"></div>
   <div id="popup-cur"></div>
   <div class="brow" style="margin-top:14px">
-    <button class="btn bpl" onclick="setStatus('planned')">📌 Plannen</button>
-    <button class="btn bdo" onclick="setStatus('done')">✅ Gedaan</button>
-    <button class="btn bno" onclick="setStatus('none')">✖ Reset</button>
+    <button class="btn bpl" onclick="setStatus('planned')">Plannen</button>
+    <button class="btn bdo" onclick="setStatus('done')">Gedaan</button>
+    <button class="btn bno" onclick="setStatus('none')">Reset</button>
   </div>
 </div>
 
 <!-- GPS bar -->
 <div id="gps-bar">
   <span class="gs" id="gps-street">–</span>
-  <button class="gbtn" style="background:#f59e0b" onclick="markDetectedStreet('planned')">📌 Plannen</button>
-  <button class="gbtn" style="background:#16a34a" onclick="markDetectedStreet('done')">✅ Gedaan</button>
+  <button class="gbtn" style="background:rgba(255,255,255,.2);color:#fff" onclick="markDetectedStreet('planned')">Plannen</button>
+  <button class="gbtn" style="background:#fff;color:#1565c0" onclick="markDetectedStreet('done')">Gedaan</button>
 </div>
 
 <!-- Bulk modal -->
 <div id="bulk-modal">
   <span id="xbulk" onclick="closeBulkModal()">✕</span>
-  <h3>🗑️ Bulk straten toevoegen</h3>
+  <h3>Bulk straten toevoegen</h3>
   <textarea id="bulk-input" placeholder="Kerkstraat&#10;Ringlaan&#10;Marktplein"></textarea>
   <div class="brow" style="margin-top:14px">
     <button class="btn bpl" onclick="processBulkAdd()">✅ Toevoegen</button>
@@ -669,7 +695,7 @@ function toggleGPS() {
     navigator.geolocation.clearWatch(watchId);
     watchId = null;
     if (locMark) { map.removeLayer(locMark); locMark = null; }
-    document.getElementById('gps-bar').style.display = 'none';
+    setGpsBar(false);
     detectedId = null; detectedName = null;
     btn.classList.remove('on');
   } else {
@@ -720,16 +746,20 @@ function updateGpsBar(lat, lng) {
       if (d < bestDist) { bestDist = d; bestId = f.id; bestName = f.properties.name; }
     }
   }
-  const bar = document.getElementById('gps-bar');
   if (bestId) {
     detectedId   = bestId;
     detectedName = bestName;
-    document.getElementById('gps-street').textContent = '📍 ' + bestName;
-    bar.style.display = 'flex';
+    document.getElementById('gps-street').textContent = bestName;
+    setGpsBar(true);
   } else {
     detectedId = null; detectedName = null;
-    bar.style.display = 'none';
+    setGpsBar(false);
   }
+}
+
+function setGpsBar(visible) {
+  document.getElementById('gps-bar').style.display = visible ? 'flex' : 'none';
+  document.getElementById('gpsbtn').style.bottom   = visible ? '110px' : '76px';
 }
 
 async function markDetectedStreet(status) {
@@ -857,7 +887,7 @@ async function loadStreetList() {
     const label  = s.status === 'done' ? '✅ Gedaan' : '📌 Gepland';
     return '<div class="si">' +
       '<div class="sinfo">' +
-        '<div class="sname">🗺 ' + s.name + '</div>' +
+        '<div class="sname">' + s.name + '</div>' +
         '<div class="smeta">' + marked + '/' + s.segments_total + ' segm. · ' + s.coverage_pct + '% gedekt</div>' +
       '</div>' +
       '<span class="sbadge ' + badge + '">' + label + '</span>' +
@@ -928,17 +958,41 @@ async function resetByName(idx) {
 // ============================================================
 // STATS (TAB 3)
 // ============================================================
+function computeStats() {
+  let doneM = 0, plannedM = 0, doneSegs = 0, plannedSegs = 0;
+  const doneNames = new Set(), plannedNames = new Set();
+  for (const f of allFeatures) {
+    const st = statuses[f.id] || 'none';
+    if (st === 'none') continue;
+    const c = f.geometry.coordinates;
+    let m = 0;
+    for (let i = 0; i < c.length - 1; i++) {
+      const dlat = (c[i+1][1] - c[i][1]) * 111320;
+      const dlon = (c[i+1][0] - c[i][0]) * 111320 * Math.cos((c[i][1] + c[i+1][1]) / 2 * Math.PI / 180);
+      m += Math.sqrt(dlat * dlat + dlon * dlon);
+    }
+    if (st === 'done')    { doneM += m;    doneSegs++;    if (f.properties.name) doneNames.add(f.properties.name); }
+    if (st === 'planned') { plannedM += m; plannedSegs++; if (f.properties.name) plannedNames.add(f.properties.name); }
+  }
+  return { doneM, plannedM, doneSegs, plannedSegs, doneStreets: doneNames.size, plannedStreets: plannedNames.size };
+}
+
 async function loadStats() {
-  const r = await fetch('/api/stats');
-  const s = await r.json();
-  const pct = s.total > 0 ? Math.round(s.done / s.total * 100) : 0;
-  document.getElementById('st-pct').textContent     = pct + '%';
-  document.getElementById('st-pct-sub').textContent = s.done + ' van ' + s.total + ' straten gedaan';
-  document.getElementById('st-bar').style.width     = pct + '%';
-  document.getElementById('st-done').textContent    = s.done;
-  document.getElementById('st-pl').textContent      = s.planned;
-  document.getElementById('st-tot').textContent     = s.total;
-  document.getElementById('st-segpct').textContent  = s.segment_coverage_pct != null ? s.segment_coverage_pct + '%' : '–';
+  const s     = computeStats();
+  const total = s.doneSegs + s.plannedSegs;
+  const pct   = total > 0 ? Math.round(s.doneSegs / total * 100) : 0;
+  const houses = Math.round(s.doneM * 0.25 / 5) * 5;
+  const km     = (s.doneM / 1000).toFixed(1);
+
+  document.getElementById('st-houses').textContent   = houses > 0 ? '~' + houses : '–';
+  document.getElementById('st-km-lbl').textContent   = s.doneM > 0 ? km + ' km geflyerd' : 'Nog niks gedaan';
+  document.getElementById('st-pct').textContent      = pct + '%';
+  document.getElementById('st-bar').style.width      = pct + '%';
+  document.getElementById('st-plan-sub').textContent = s.doneSegs + ' van ' + total + ' geplande segmenten gedaan';
+  document.getElementById('st-done').textContent     = s.doneStreets;
+  document.getElementById('st-pl').textContent       = s.plannedStreets;
+  document.getElementById('st-km').textContent       = km;
+  document.getElementById('st-segs').textContent     = s.doneSegs;
 }
 
 async function resetStreets() {
