@@ -3,6 +3,7 @@ import sqlite3
 import requests
 import json
 import os
+import re
 import math
 from collections import defaultdict
 from datetime import date
@@ -21,8 +22,19 @@ DEFAULT_CENTER = [51.35, 6.15]
 DEFAULT_ZOOM   = 12
 
 HEADERS      = {'User-Agent': 'HogedrukVenlo/1.0 (flyertracker)'}
-VERSION      = "2.0.7"
 CACHE_VERSION = "4"  # bump when segmentation logic changes to force cache rebuild
+
+def _read_version():
+    try:
+        text = open('/config.yaml').read()
+        m = re.search(r'^version:\s*["\']?([^"\'\s]+)', text, re.MULTILINE)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+    return "unknown"
+
+VERSION = _read_version()
 MIN_SEGMENT_METERS = 20  # segments shorter than this are merged into their neighbour
 
 # ---------------------------------------------------------------------------
