@@ -3,6 +3,8 @@ import sqlite3
 import requests
 import json
 import os
+import math
+from collections import defaultdict
 from datetime import date
 
 app = Flask(__name__)
@@ -67,11 +69,18 @@ def init_db():
         );
     ''')
     for stmt in ['ALTER TABLE streets ADD COLUMN house_from INTEGER',
-                 'ALTER TABLE streets ADD COLUMN house_to INTEGER']:
+                 'ALTER TABLE streets ADD COLUMN house_to INTEGER',
+                 'ALTER TABLE streets ADD COLUMN parent_osm_id TEXT',
+                 'ALTER TABLE streets ADD COLUMN segment_index INTEGER']:
         try:
             conn.execute(stmt)
         except Exception:
             pass
+
+    try:
+        conn.execute("UPDATE streets SET parent_osm_id = osm_id, segment_index = 0 WHERE parent_osm_id IS NULL AND segment_index IS NULL")
+    except Exception:
+        pass
     for k, v in [('center_lat', str(DEFAULT_CENTER[0])),
                  ('center_lng', str(DEFAULT_CENTER[1])),
                  ('zoom', str(DEFAULT_ZOOM))]:
@@ -108,6 +117,76 @@ out geom;
     r.raise_for_status()
     return r.json()
 
+def angle_between_points(p1, p2, p3):
+    """Calculate angle at p2 in degrees. Returns 0-180."""
+    dx1, dy1 = p1[0] - p2[0], p1[1] - p2[1]
+    dx2, dy2 = p3[0] - p2[0], p3[1] - p2[1]
+    dot = dx1*dx2 + dy1*dy2
+    mag1 = math.sqrt(dx1*dx1 + dy1*dy1)
+    mag2 = math.sqrt(dx2*dx2 + dy2*dy2)
+    if mag1 == 0 or mag2 == 0:
+        return 180
+    cos_angle = dot / (mag1 * mag2)
+    cos_angle = max(-1, min(1, cos_angle))
+    return math.degrees(math.acos(cos_angle))
+
+def split_ways_to_segments(gj):
+    """Split OSM ways at intersections and 90° turns into segments."""
+    ways = gj.get('features', [])
+    if not ways:
+        return {'type': 'FeatureCollection', 'features': []}
+
+    node_to_ways = defaultdict(set)
+    for way_idx, way in enumerate(ways):
+        coords = way['geometry']['coordinates']
+        if len(coords) < 2:
+            continue
+        node_to_ways[tuple(coords[0])].add(way_idx)
+        node_to_ways[tuple(coords[-1])].add(way_idx)
+
+    intersections = {node for node, way_set in node_to_ways.items() if len(way_set) > 1}
+
+    segments = []
+    for way in ways:
+        coords = way['geometry']['coordinates']
+        if len(coords) < 2:
+            continue
+
+        split_indices = [0]
+
+        for i in range(1, len(coords) - 1):
+            node = tuple(coords[i])
+            is_intersection = node in intersections
+            is_sharp_turn = angle_between_points(coords[i-1], coords[i], coords[i+1]) < 100
+
+            if is_intersection or is_sharp_turn:
+                split_indices.append(i)
+
+        split_indices.append(len(coords) - 1)
+
+        for seg_idx in range(len(split_indices) - 1):
+            start = split_indices[seg_idx]
+            end = split_indices[seg_idx + 1] + 1
+            seg_coords = coords[start:end]
+
+            if len(seg_coords) >= 2:
+                segments.append({
+                    'type': 'Feature',
+                    'id': f"{way['id']}_{seg_idx}",
+                    'properties': {
+                        'name': way['properties'].get('name'),
+                        'highway': way['properties'].get('highway'),
+                        'parent_osm_id': way['id'],
+                        'segment_index': seg_idx,
+                    },
+                    'geometry': {
+                        'type': 'LineString',
+                        'coordinates': seg_coords
+                    }
+                })
+
+    return {'type': 'FeatureCollection', 'features': segments}
+
 def overpass_to_geojson(data):
     features = []
     for el in data.get('elements', []):
@@ -126,7 +205,8 @@ def overpass_to_geojson(data):
             },
             'geometry': {'type': 'LineString', 'coordinates': coords}
         })
-    return {'type': 'FeatureCollection', 'features': features}
+    gj = {'type': 'FeatureCollection', 'features': features}
+    return split_ways_to_segments(gj)
 
 def get_streets_geojson():
     cached_bbox = ''
