@@ -22,8 +22,8 @@ DEFAULT_ZOOM   = 12
 
 HEADERS      = {'User-Agent': 'HogedrukVenlo/1.0 (flyertracker)'}
 VERSION      = "2.0.5"
-CACHE_VERSION = "3"  # bump when segmentation logic changes to force cache rebuild
-MIN_SEGMENT_METERS = 5  # segments shorter than this are merged into their neighbour
+CACHE_VERSION = "4"  # bump when segmentation logic changes to force cache rebuild
+MIN_SEGMENT_METERS = 20  # segments shorter than this are merged into their neighbour
 
 # ---------------------------------------------------------------------------
 # Database

@@ -1,7 +1,7 @@
 name: "Flyer Tracker"
 description: "Kaart om geflyerde straten bij te houden – Hogedruk Venlo"
 #Homeassistant version, this has to be changed for every push:
-version: "2.0.6"
+version: "2.0.7"
 slug: "flyertracker"
 url: "https://github.com/stsanders06/flyertracker"
 init: false
