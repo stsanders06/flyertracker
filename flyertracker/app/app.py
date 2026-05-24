@@ -21,8 +21,9 @@ DEFAULT_CENTER = [51.35, 6.15]
 DEFAULT_ZOOM   = 12
 
 HEADERS      = {'User-Agent': 'HogedrukVenlo/1.0 (flyertracker)'}
-VERSION      = "2.0.4"
-CACHE_VERSION = "2"  # bump when segmentation logic changes to force cache rebuild
+VERSION      = "2.0.5"
+CACHE_VERSION = "3"  # bump when segmentation logic changes to force cache rebuild
+MIN_SEGMENT_METERS = 5  # segments shorter than this are merged into their neighbour
 
 # ---------------------------------------------------------------------------
 # Database
@@ -132,6 +133,32 @@ def angle_between_points(p1, p2, p3):
     cos_angle = max(-1, min(1, cos_angle))
     return math.degrees(math.acos(cos_angle))
 
+def polyline_length_meters(coords):
+    """Flat-earth approximation of a [lon, lat] polyline length in metres."""
+    total = 0.0
+    for i in range(len(coords) - 1):
+        lon1, lat1 = coords[i]
+        lon2, lat2 = coords[i + 1]
+        mid_lat = math.radians((lat1 + lat2) / 2)
+        dlat = (lat2 - lat1) * 111_320
+        dlon = (lon2 - lon1) * 111_320 * math.cos(mid_lat)
+        total += math.sqrt(dlat * dlat + dlon * dlon)
+    return total
+
+def merge_short_splits(coords, indices):
+    """Remove split points that would produce segments shorter than MIN_SEGMENT_METERS."""
+    if len(indices) <= 2:
+        return indices
+    merged = [indices[0]]
+    for idx in indices[1:-1]:
+        if polyline_length_meters(coords[merged[-1]:idx + 1]) >= MIN_SEGMENT_METERS:
+            merged.append(idx)
+    merged.append(indices[-1])
+    # Also merge a trailing short segment back into its predecessor
+    while len(merged) > 2 and polyline_length_meters(coords[merged[-2]:merged[-1] + 1]) < MIN_SEGMENT_METERS:
+        merged.pop(-2)
+    return merged
+
 def split_ways_to_segments(gj):
     """Split OSM ways at intersections, T-junctions, and 90° turns into segments."""
     ways = gj.get('features', [])
@@ -168,6 +195,7 @@ def split_ways_to_segments(gj):
 
         split_indices.append(len(coords) - 1)
         split_indices = sorted(set(split_indices))
+        split_indices = merge_short_splits(coords, split_indices)
 
         for seg_idx in range(len(split_indices) - 1):
             start = split_indices[seg_idx]
