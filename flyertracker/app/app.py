@@ -367,7 +367,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:
 </head>
 <body>
 
-<div id="hdr"><h1>📋 Flyer Tracker – Hogedruk Venlo</h1><span style="position:absolute;right:14px;top:50%;transform:translateY(-50%);font-size:11px;color:#aaa">v{{ version }}</span></div>
+<div id="hdr"><h1>📋 Flyer Tracker – Hogedruk Venlo</h1><div style="position:absolute;right:14px;top:50%;transform:translateY(-50%);display:flex;align-items:center;gap:10px"><span style="font-size:11px;color:#aaa">v{{ version }}</span><button onclick="resetStreets()" style="background:none;border:none;color:#aaa;font-size:17px;cursor:pointer;padding:2px" title="Reset alle straten">🗑</button></div></div>
 
 <div id="content">
 
@@ -913,6 +913,13 @@ async function loadStats() {
   document.getElementById('st-segpct').textContent  = s.segment_coverage_pct != null ? s.segment_coverage_pct + '%' : '–';
 }
 
+async function resetStreets() {
+  if (!confirm('Alle straat-statussen verwijderen en opnieuw beginnen?')) return;
+  await fetch('/api/reset-streets', { method: 'POST' });
+  statuses = {};
+  Object.keys(sLayers).forEach(id => applyStyle(id));
+}
+
 // ============================================================
 // INIT
 // ============================================================
@@ -1124,6 +1131,15 @@ def api_refresh():
     for p in [CACHE_PATH, BBOX_FILE]:
         if os.path.exists(p):
             os.remove(p)
+    return jsonify({'ok': True})
+
+# --- Reset all street statuses ---
+@app.route('/api/reset-streets', methods=['POST'])
+def api_reset_streets():
+    conn = get_db()
+    conn.execute("DELETE FROM streets")
+    conn.commit()
+    conn.close()
     return jsonify({'ok': True})
 
 # --- Version ---
