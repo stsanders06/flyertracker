@@ -20,8 +20,9 @@ DEFAULT_BBOX   = "51.27,6.06,51.42,6.23"
 DEFAULT_CENTER = [51.35, 6.15]
 DEFAULT_ZOOM   = 12
 
-HEADERS = {'User-Agent': 'HogedrukVenlo/1.0 (flyertracker)'}
-VERSION = "2.0.3"
+HEADERS      = {'User-Agent': 'HogedrukVenlo/1.0 (flyertracker)'}
+VERSION      = "2.0.4"
+CACHE_VERSION = "2"  # bump when segmentation logic changes to force cache rebuild
 
 # ---------------------------------------------------------------------------
 # Database
@@ -137,26 +138,18 @@ def split_ways_to_segments(gj):
     if not ways:
         return {'type': 'FeatureCollection', 'features': []}
 
-    all_coords = defaultdict(set)
+    # Map each coordinate to the set of way indices (integers) that use it.
+    # Using integer indices avoids comparing against the OSM string ID later.
+    coord_to_ways = defaultdict(set)
     for way_idx, way in enumerate(ways):
         coords = way['geometry']['coordinates']
         if len(coords) < 2:
             continue
-        for i, coord in enumerate(coords):
-            coord_tuple = tuple(coord)
-            if i == 0 or i == len(coords) - 1:
-                all_coords[coord_tuple].add(('endpoint', way_idx))
-            else:
-                all_coords[coord_tuple].add(('intermediate', way_idx))
-
-    junction_endpoints = set()
-    for coord_tuple, coord_info in all_coords.items():
-        way_ids = {way_id for _, way_id in coord_info}
-        if len(way_ids) > 1:
-            junction_endpoints.add(coord_tuple)
+        for coord in coords:
+            coord_to_ways[tuple(coord)].add(way_idx)
 
     segments = []
-    for way in ways:
+    for way_idx, way in enumerate(ways):
         coords = way['geometry']['coordinates']
         if len(coords) < 2:
             continue
@@ -165,19 +158,12 @@ def split_ways_to_segments(gj):
 
         for i in range(1, len(coords) - 1):
             coord_tuple = tuple(coords[i])
-            coord_info = all_coords.get(coord_tuple, set())
-
-            is_junction = any(way_id != way['id'] for _, way_id in coord_info)
+            # T-junction / crossing: this node is shared with at least one other way
+            is_junction = len(coord_to_ways.get(coord_tuple, set())) > 1
+            # Sharp bend (< 100° between incoming and outgoing direction)
             is_sharp_turn = angle_between_points(coords[i-1], coords[i], coords[i+1]) < 100
 
             if is_junction or is_sharp_turn:
-                split_indices.append(i)
-
-        for i in (0, len(coords) - 1):
-            if i > 0 and i < len(coords) - 1:
-                continue
-            coord_tuple = tuple(coords[i])
-            if coord_tuple in junction_endpoints and i not in split_indices:
                 split_indices.append(i)
 
         split_indices.append(len(coords) - 1)
@@ -234,13 +220,25 @@ def get_streets_geojson():
             cached_bbox = open(BBOX_FILE).read().strip()
         except Exception:
             pass
-    if cached_bbox != DEFAULT_BBOX:
-        if os.path.exists(CACHE_PATH):
-            os.remove(CACHE_PATH)
+
+    # Invalidate cache when bbox or segmentation version changes
+    cache_stale = cached_bbox != DEFAULT_BBOX
+    if not cache_stale and os.path.exists(CACHE_PATH):
+        try:
+            with open(CACHE_PATH) as f:
+                cached = json.load(f)
+            if cached.get('cache_version') != CACHE_VERSION:
+                cache_stale = True
+        except Exception:
+            cache_stale = True
+
+    if cache_stale and os.path.exists(CACHE_PATH):
+        os.remove(CACHE_PATH)
 
     if not os.path.exists(CACHE_PATH):
         data = fetch_from_overpass(DEFAULT_BBOX)
         gj   = overpass_to_geojson(data)
+        gj['cache_version'] = CACHE_VERSION
         with open(CACHE_PATH, 'w') as f:
             json.dump(gj, f)
         with open(BBOX_FILE, 'w') as f:
