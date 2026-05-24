@@ -149,6 +149,12 @@ def split_ways_to_segments(gj):
             else:
                 all_coords[coord_tuple].add(('intermediate', way_idx))
 
+    junction_endpoints = set()
+    for coord_tuple, coord_info in all_coords.items():
+        way_ids = {way_id for _, way_id in coord_info}
+        if len(way_ids) > 1:
+            junction_endpoints.add(coord_tuple)
+
     segments = []
     for way in ways:
         coords = way['geometry']['coordinates']
@@ -167,7 +173,15 @@ def split_ways_to_segments(gj):
             if is_junction or is_sharp_turn:
                 split_indices.append(i)
 
+        for i in (0, len(coords) - 1):
+            if i > 0 and i < len(coords) - 1:
+                continue
+            coord_tuple = tuple(coords[i])
+            if coord_tuple in junction_endpoints and i not in split_indices:
+                split_indices.append(i)
+
         split_indices.append(len(coords) - 1)
+        split_indices = sorted(set(split_indices))
 
         for seg_idx in range(len(split_indices) - 1):
             start = split_indices[seg_idx]
@@ -1113,6 +1127,11 @@ def api_refresh():
         if os.path.exists(p):
             os.remove(p)
     return jsonify({'ok': True})
+
+# --- Version ---
+@app.route('/api/version')
+def api_version():
+    return jsonify({'version': VERSION})
 
 # ---------------------------------------------------------------------------
 
