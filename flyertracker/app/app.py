@@ -1023,6 +1023,18 @@ async function resetStreets() {
 // ============================================================
 // INIT
 // ============================================================
+
+// Fix iOS standalone webapp viewport height bug (landscape→portrait glitch)
+function fixLayout() {
+  const h = window.innerHeight;
+  document.getElementById('content').style.height =
+    (h - document.getElementById('hdr').offsetHeight - document.getElementById('nav').offsetHeight) + 'px';
+  map.invalidateSize();
+}
+window.addEventListener('resize', fixLayout);
+window.addEventListener('orientationchange', () => setTimeout(fixLayout, 150));
+window.addEventListener('load', fixLayout);
+
 loadStreets();
 </script>
 </body>
