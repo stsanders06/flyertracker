@@ -304,16 +304,15 @@ HTML = r"""<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
 <title>Flyer Tracker – Hogedruk Venlo</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-html{background:#1565c0}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;display:flex;flex-direction:column;height:100vh;height:100dvh;background:#f0f2f5;overflow:hidden}
 
 /* Header */
-#hdr{background:#1565c0;color:#fff;padding:12px 16px;padding-top:calc(12px + env(safe-area-inset-top));display:flex;align-items:center;justify-content:space-between;flex-shrink:0;z-index:100}
+#hdr{background:#1565c0;color:#fff;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;z-index:100}
 #hdr-title{font-size:16px;font-weight:700;letter-spacing:-.3px}
 #hdr-sub{font-size:10px;color:rgba(255,255,255,.5);margin-top:1px}
 #hdr-right{display:flex;align-items:center;gap:8px}
@@ -1023,17 +1022,6 @@ async function resetStreets() {
 // ============================================================
 // INIT
 // ============================================================
-
-// Fix iOS standalone webapp viewport height bug (landscape→portrait glitch)
-function fixLayout() {
-  const h = window.innerHeight;
-  document.getElementById('content').style.height =
-    (h - document.getElementById('hdr').offsetHeight - document.getElementById('nav').offsetHeight) + 'px';
-  map.invalidateSize();
-}
-window.addEventListener('resize', fixLayout);
-window.addEventListener('orientationchange', () => setTimeout(fixLayout, 150));
-window.addEventListener('load', fixLayout);
 
 loadStreets();
 </script>
