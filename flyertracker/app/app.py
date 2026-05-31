@@ -121,69 +121,18 @@ def set_setting(key, value):
 
 def fetch_from_overpass(bbox):
     query = f"""
-[out:json][timeout:90];
+[out:json][timeout:120];
 (
   way["highway"]["name"]({bbox});
-);
-out geom;
-"""
-    r = requests.post('https://overpass-api.de/api/interpreter',
-                      data=query, timeout=120, headers=HEADERS)
-    r.raise_for_status()
-    return r.json()
-
-def fetch_addresses_from_overpass(bbox):
-    query = f"""
-[out:json][timeout:90];
-(
   node["addr:housenumber"]({bbox});
   way["addr:interpolation"]({bbox});
-  relation["type"="associatedStreet"]({bbox});
 );
 out geom center;
 """
     r = requests.post('https://overpass-api.de/api/interpreter',
-                      data=query, timeout=120, headers=HEADERS)
+                      data=query, timeout=150, headers=HEADERS)
     r.raise_for_status()
     return r.json()
-
-def parse_house_numbers(addr_data):
-    addresses = []
-    if not addr_data:
-        return addresses
-
-    for el in addr_data.get('elements', []):
-        if el['type'] == 'node' and 'lat' in el and 'lon' in el:
-            tags = el.get('tags', {})
-            if 'addr:housenumber' in tags:
-                try:
-                    house_num = int(tags['addr:housenumber'])
-                    addresses.append({
-                        'lat': el['lat'],
-                        'lon': el['lon'],
-                        'number': house_num,
-                        'street': tags.get('addr:street', '')
-                    })
-                except (ValueError, TypeError):
-                    pass
-        elif el['type'] == 'way' and 'addr:interpolation' in el.get('tags', {}):
-            tags = el.get('tags', {})
-            geom = el.get('geometry', [])
-            if len(geom) >= 2 and 'addr:housenumber' in tags:
-                try:
-                    start_num = int(tags.get('addr:housenumber', '0'))
-                    end_num = int(tags.get('addr:housenumber:end', start_num))
-                    addresses.append({
-                        'type': 'interpolation',
-                        'start': start_num,
-                        'end': end_num,
-                        'geom': geom,
-                        'street': tags.get('addr:street', '')
-                    })
-                except (ValueError, TypeError):
-                    pass
-
-    return addresses
 
 def point_to_line_distance(lat, lon, lat1, lon1, lat2, lon2):
     """Calculate distance from point to line segment (in meters, flat earth approx)."""
@@ -350,26 +299,58 @@ def split_ways_to_segments(gj, addresses=None):
     return {'type': 'FeatureCollection', 'features': segments}
 
 
-def overpass_to_geojson(data, addr_data=None):
+def overpass_to_geojson(data):
     features = []
+    addresses = []
+
     for el in data.get('elements', []):
-        if el['type'] != 'way' or 'geometry' not in el:
-            continue
-        hw = el.get('tags', {}).get('highway', '')
-        if hw in ('motorway', 'motorway_link', 'trunk', 'trunk_link'):
-            continue
-        coords = [[pt['lon'], pt['lat']] for pt in el['geometry']]
-        features.append({
-            'type': 'Feature',
-            'id': str(el['id']),
-            'properties': {
-                'name': el.get('tags', {}).get('name', 'Onbekend'),
-                'highway': hw,
-            },
-            'geometry': {'type': 'LineString', 'coordinates': coords}
-        })
+        if el['type'] == 'way' and 'geometry' in el:
+            hw = el.get('tags', {}).get('highway', '')
+            if hw in ('motorway', 'motorway_link', 'trunk', 'trunk_link'):
+                continue
+            if el.get('tags', {}).get('name'):
+                coords = [[pt['lon'], pt['lat']] for pt in el['geometry']]
+                features.append({
+                    'type': 'Feature',
+                    'id': str(el['id']),
+                    'properties': {
+                        'name': el.get('tags', {}).get('name', 'Onbekend'),
+                        'highway': hw,
+                    },
+                    'geometry': {'type': 'LineString', 'coordinates': coords}
+                })
+        elif el['type'] == 'node' and 'lat' in el and 'lon' in el:
+            tags = el.get('tags', {})
+            if 'addr:housenumber' in tags:
+                try:
+                    house_num = int(tags['addr:housenumber'])
+                    addresses.append({
+                        'lat': el['lat'],
+                        'lon': el['lon'],
+                        'number': house_num,
+                        'street': tags.get('addr:street', '')
+                    })
+                except (ValueError, TypeError):
+                    pass
+        elif el['type'] == 'way':
+            tags = el.get('tags', {})
+            if 'addr:interpolation' in tags and 'geometry' in el:
+                geom = el.get('geometry', [])
+                if len(geom) >= 2 and 'addr:housenumber' in tags:
+                    try:
+                        start_num = int(tags.get('addr:housenumber', '0'))
+                        end_num = int(tags.get('addr:housenumber:end', start_num))
+                        addresses.append({
+                            'type': 'interpolation',
+                            'start': start_num,
+                            'end': end_num,
+                            'geom': [[pt['lon'], pt['lat']] for pt in geom],
+                            'street': tags.get('addr:street', '')
+                        })
+                    except (ValueError, TypeError):
+                        pass
+
     gj = {'type': 'FeatureCollection', 'features': features}
-    addresses = parse_house_numbers(addr_data) if addr_data else []
     return split_ways_to_segments(gj, addresses)
 
 def get_streets_geojson():
@@ -395,8 +376,7 @@ def get_streets_geojson():
 
     if not os.path.exists(CACHE_PATH):
         data = fetch_from_overpass(DEFAULT_BBOX)
-        addr_data = fetch_addresses_from_overpass(DEFAULT_BBOX)
-        gj = overpass_to_geojson(data, addr_data)
+        gj = overpass_to_geojson(data)
         gj['cache_version'] = CACHE_VERSION
         with open(CACHE_PATH, 'w') as f:
             json.dump(gj, f)
