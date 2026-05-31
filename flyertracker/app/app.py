@@ -302,7 +302,7 @@ HTML = r"""<!DOCTYPE html>
 <html lang="nl">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <title>Flyer Tracker – Hogedruk Venlo</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <style>
@@ -310,7 +310,7 @@ HTML = r"""<!DOCTYPE html>
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;display:flex;flex-direction:column;height:100vh;height:100dvh;background:#f0f2f5;overflow:hidden}
 
 /* Header */
-#hdr{background:#1565c0;color:#fff;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;z-index:100}
+#hdr{background:#1565c0;color:#fff;padding:12px 16px;padding-top:calc(12px + env(safe-area-inset-top));display:flex;align-items:center;justify-content:space-between;flex-shrink:0;z-index:100}
 #hdr-title{font-size:16px;font-weight:700;letter-spacing:-.3px}
 #hdr-sub{font-size:10px;color:rgba(255,255,255,.5);margin-top:1px}
 #hdr-right{display:flex;align-items:center;gap:8px}
@@ -324,7 +324,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;d
 .tab.on{display:flex}
 
 /* Bottom nav */
-#nav{display:flex;background:#fff;border-top:1px solid #e8eaed;flex-shrink:0}
+#nav{display:flex;background:#fff;border-top:1px solid #e8eaed;flex-shrink:0;padding-bottom:env(safe-area-inset-bottom)}
 .nb{flex:1;padding:9px 4px 9px;border:none;background:none;cursor:pointer;font-size:10px;color:#94a3b8;display:flex;flex-direction:column;align-items:center;gap:4px;font-weight:500;transition:color .15s}
 .nb svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
 .nb.on{color:#1565c0}
@@ -333,16 +333,16 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;d
 #map{flex:1}
 
 /* GPS button */
-#gpsbtn{position:fixed;bottom:76px;left:12px;width:44px;height:44px;background:#fff;border:none;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 14px rgba(0,0,0,.18);z-index:1000;color:#64748b;transition:bottom .2s ease,color .2s,box-shadow .2s}
+#gpsbtn{position:fixed;bottom:calc(76px + env(safe-area-inset-bottom));left:12px;width:44px;height:44px;background:#fff;border:none;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 14px rgba(0,0,0,.18);z-index:1000;color:#64748b;transition:bottom .2s ease,color .2s,box-shadow .2s}
 #gpsbtn.on{color:#1565c0;box-shadow:0 2px 14px rgba(21,101,192,.35)}
 
 /* Legend */
-#legend{position:fixed;bottom:70px;right:10px;background:#fff;border-radius:12px;padding:8px 13px;box-shadow:0 2px 14px rgba(0,0,0,.1);z-index:1000;font-size:11px;line-height:2;color:#374151}
+#legend{position:fixed;bottom:calc(70px + env(safe-area-inset-bottom));right:10px;background:#fff;border-radius:12px;padding:8px 13px;box-shadow:0 2px 14px rgba(0,0,0,.1);z-index:1000;font-size:11px;line-height:2;color:#374151}
 #legend div{display:flex;align-items:center;gap:8px}
 .ll{width:18px;height:3px;border-radius:2px;flex-shrink:0}
 
 /* Street popup */
-#popup{position:fixed;bottom:0;left:0;right:0;background:#fff;border-radius:20px 20px 0 0;padding:18px 18px 32px;box-shadow:0 -4px 24px rgba(0,0,0,.12);z-index:2000;display:none}
+#popup{position:fixed;bottom:0;left:0;right:0;background:#fff;border-radius:20px 20px 0 0;padding:18px 18px calc(32px + env(safe-area-inset-bottom));box-shadow:0 -4px 24px rgba(0,0,0,.12);z-index:2000;display:none}
 #popup-name{font-size:17px;font-weight:700;margin-bottom:3px;color:#111}
 #popup-cur{font-size:12px;color:#94a3b8;margin-bottom:16px}
 #xpop{position:absolute;top:14px;right:16px;font-size:20px;color:#d1d5db;cursor:pointer;line-height:1}
@@ -402,12 +402,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;d
 .pbar-sub{font-size:11px;color:#9ca3af;margin-top:7px}
 
 /* GPS street bar */
-#gps-bar{position:fixed;bottom:56px;left:0;right:0;background:#1565c0;color:#fff;padding:10px 14px;display:none;align-items:center;gap:8px;z-index:1500;font-size:13px;box-shadow:0 -2px 12px rgba(21,101,192,.3)}
+#gps-bar{position:fixed;bottom:calc(56px + env(safe-area-inset-bottom));left:0;right:0;background:#1565c0;color:#fff;padding:10px 14px;display:none;align-items:center;gap:8px;z-index:1500;font-size:13px;box-shadow:0 -2px 12px rgba(21,101,192,.3)}
 #gps-bar .gs{flex:1;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .gbtn{padding:6px 13px;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;flex-shrink:0}
 
 /* Bulk modal */
-#bulk-modal{position:fixed;bottom:0;left:0;right:0;background:#fff;border-radius:20px 20px 0 0;padding:18px 18px 32px;box-shadow:0 -4px 24px rgba(0,0,0,.12);z-index:2000;display:none;max-height:80vh;overflow-y:auto}
+#bulk-modal{position:fixed;bottom:0;left:0;right:0;background:#fff;border-radius:20px 20px 0 0;padding:18px 18px calc(32px + env(safe-area-inset-bottom));box-shadow:0 -4px 24px rgba(0,0,0,.12);z-index:2000;display:none;max-height:80vh;overflow-y:auto}
 #bulk-modal h3{font-size:15px;font-weight:700;color:#1e293b;margin-bottom:12px}
 #bulk-modal textarea{width:100%;height:120px;padding:10px;border:1.5px solid #e2e8f0;border-radius:10px;font-size:13px;font-family:monospace;resize:vertical;outline:none}
 #bulk-modal textarea:focus{border-color:#1565c0}
@@ -771,7 +771,10 @@ function updateGpsBar(lat, lng) {
 
 function setGpsBar(visible) {
   document.getElementById('gps-bar').style.display = visible ? 'flex' : 'none';
-  document.getElementById('gpsbtn').style.bottom   = visible ? '110px' : '76px';
+  const sab = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sab') || '0') || 0;
+  document.getElementById('gpsbtn').style.bottom = visible
+    ? 'calc(110px + env(safe-area-inset-bottom))'
+    : 'calc(76px + env(safe-area-inset-bottom))';
 }
 
 async function markDetectedStreet(status) {
