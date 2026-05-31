@@ -22,7 +22,7 @@ DEFAULT_CENTER = [51.35, 6.15]
 DEFAULT_ZOOM   = 12
 
 HEADERS      = {'User-Agent': 'HogedrukVenlo/1.0 (flyertracker)'}
-CACHE_VERSION = "5"  # bump when segmentation logic changes to force cache rebuild
+CACHE_VERSION = "4"  # bump when segmentation logic changes to force cache rebuild
 
 def _read_version():
     try:
@@ -132,122 +132,6 @@ out geom;
     r.raise_for_status()
     return r.json()
 
-def fetch_addresses_from_overpass(bbox):
-    query = f"""
-[out:json][timeout:90];
-(
-  node["addr:housenumber"]({bbox});
-  way["addr:interpolation"]({bbox});
-  relation["type"="associatedStreet"]({bbox});
-);
-out geom center;
-"""
-    r = requests.post('https://overpass-api.de/api/interpreter',
-                      data=query, timeout=120, headers=HEADERS)
-    r.raise_for_status()
-    return r.json()
-
-def parse_house_numbers(addr_data):
-    addresses = []
-    if not addr_data:
-        return addresses
-
-    for el in addr_data.get('elements', []):
-        if el['type'] == 'node' and 'lat' in el and 'lon' in el:
-            tags = el.get('tags', {})
-            if 'addr:housenumber' in tags:
-                try:
-                    house_num = int(tags['addr:housenumber'])
-                    addresses.append({
-                        'lat': el['lat'],
-                        'lon': el['lon'],
-                        'number': house_num,
-                        'street': tags.get('addr:street', '')
-                    })
-                except (ValueError, TypeError):
-                    pass
-        elif el['type'] == 'way' and 'addr:interpolation' in el.get('tags', {}):
-            tags = el.get('tags', {})
-            geom = el.get('geometry', [])
-            if len(geom) >= 2 and 'addr:housenumber' in tags:
-                try:
-                    start_num = int(tags.get('addr:housenumber', '0'))
-                    end_num = int(tags.get('addr:housenumber:end', start_num))
-                    addresses.append({
-                        'type': 'interpolation',
-                        'start': start_num,
-                        'end': end_num,
-                        'geom': geom,
-                        'street': tags.get('addr:street', '')
-                    })
-                except (ValueError, TypeError):
-                    pass
-
-    return addresses
-
-def point_to_line_distance(lat, lon, lat1, lon1, lat2, lon2):
-    """Calculate distance from point to line segment (in meters, flat earth approx)."""
-    R = 6371000
-    rad = math.pi / 180
-    scaleX = math.cos((lat1 + lat2) / 2 * rad)
-    dy = (lat2 - lat1) * R * rad
-    dx = (lon2 - lon1) * R * rad * scaleX
-    py = (lat - lat1) * R * rad
-    px = (lon - lon1) * R * rad * scaleX
-    len2 = dx*dx + dy*dy
-    t = len2 > 0 and max(0, min(1, (px*dx + py*dy) / len2)) or 0
-    return math.sqrt((px - t*dx)**2 + (py - t*dy)**2)
-
-def count_houses_for_segment(segment_coords, addresses, street_name=''):
-    """Count houses along a segment based on OSM address data."""
-    if not addresses:
-        return 0
-
-    count = 0
-    segment_distance = polyline_length_meters(segment_coords)
-    if segment_distance < 5:
-        return 0
-
-    segment_lat_range = [min(c[1] for c in segment_coords), max(c[1] for c in segment_coords)]
-    segment_lon_range = [min(c[0] for c in segment_coords), max(c[0] for c in segment_coords)]
-
-    PROXIMITY_THRESHOLD = 50
-
-    for addr in addresses:
-        if addr.get('type') == 'interpolation':
-            try:
-                geom = addr.get('geom', [])
-                for i in range(len(geom) - 1):
-                    lat1, lon1 = geom[i][1], geom[i][0]
-                    lat2, lon2 = geom[i+1][1], geom[i+1][0]
-                    for seg_i in range(len(segment_coords) - 1):
-                        seg_lat1, seg_lon1 = segment_coords[seg_i][1], segment_coords[seg_i][0]
-                        seg_lat2, seg_lon2 = segment_coords[seg_i+1][1], segment_coords[seg_i+1][0]
-
-                        dist = point_to_line_distance(lat1, lon1, seg_lat1, seg_lon1, seg_lat2, seg_lon2)
-                        if dist < PROXIMITY_THRESHOLD:
-                            house_count = max(1, abs(addr.get('end', 0) - addr.get('start', 0)) // 2 + 1)
-                            count += house_count
-                            break
-            except Exception:
-                pass
-        else:
-            lat = addr.get('lat')
-            lon = addr.get('lon')
-            if not (segment_lat_range[0] - 0.01 <= lat <= segment_lat_range[1] + 0.01 and
-                    segment_lon_range[0] - 0.01 <= lon <= segment_lon_range[1] + 0.01):
-                continue
-
-            for i in range(len(segment_coords) - 1):
-                lat1, lon1 = segment_coords[i][1], segment_coords[i][0]
-                lat2, lon2 = segment_coords[i+1][1], segment_coords[i+1][0]
-                dist = point_to_line_distance(lat, lon, lat1, lon1, lat2, lon2)
-                if dist < PROXIMITY_THRESHOLD:
-                    count += 1
-                    break
-
-    return max(0, count)
-
 def angle_between_points(p1, p2, p3):
     """Calculate angle at p2 in degrees. Returns 0-180."""
     dx1, dy1 = p1[0] - p2[0], p1[1] - p2[1]
@@ -287,15 +171,14 @@ def merge_short_splits(coords, indices):
         merged.pop(-2)
     return merged
 
-def split_ways_to_segments(gj, addresses=None):
+def split_ways_to_segments(gj):
     """Split OSM ways at intersections, T-junctions, and 90° turns into segments."""
-    if addresses is None:
-        addresses = []
-
     ways = gj.get('features', [])
     if not ways:
         return {'type': 'FeatureCollection', 'features': []}
 
+    # Map each coordinate to the set of way indices (integers) that use it.
+    # Using integer indices avoids comparing against the OSM string ID later.
     coord_to_ways = defaultdict(set)
     for way_idx, way in enumerate(ways):
         coords = way['geometry']['coordinates']
@@ -314,7 +197,9 @@ def split_ways_to_segments(gj, addresses=None):
 
         for i in range(1, len(coords) - 1):
             coord_tuple = tuple(coords[i])
+            # T-junction / crossing: this node is shared with at least one other way
             is_junction = len(coord_to_ways.get(coord_tuple, set())) > 1
+            # Sharp bend (< 100° between incoming and outgoing direction)
             is_sharp_turn = angle_between_points(coords[i-1], coords[i], coords[i+1]) < 100
 
             if is_junction or is_sharp_turn:
@@ -330,7 +215,6 @@ def split_ways_to_segments(gj, addresses=None):
             seg_coords = coords[start:end]
 
             if len(seg_coords) >= 2:
-                house_count = count_houses_for_segment(seg_coords, addresses, way['properties'].get('name', ''))
                 segments.append({
                     'type': 'Feature',
                     'id': f"{way['id']}_{seg_idx}",
@@ -339,7 +223,6 @@ def split_ways_to_segments(gj, addresses=None):
                         'highway': way['properties'].get('highway'),
                         'parent_osm_id': way['id'],
                         'segment_index': seg_idx,
-                        'house_count': house_count,
                     },
                     'geometry': {
                         'type': 'LineString',
@@ -349,8 +232,7 @@ def split_ways_to_segments(gj, addresses=None):
 
     return {'type': 'FeatureCollection', 'features': segments}
 
-
-def overpass_to_geojson(data, addr_data=None):
+def overpass_to_geojson(data):
     features = []
     for el in data.get('elements', []):
         if el['type'] != 'way' or 'geometry' not in el:
@@ -369,8 +251,7 @@ def overpass_to_geojson(data, addr_data=None):
             'geometry': {'type': 'LineString', 'coordinates': coords}
         })
     gj = {'type': 'FeatureCollection', 'features': features}
-    addresses = parse_house_numbers(addr_data) if addr_data else []
-    return split_ways_to_segments(gj, addresses)
+    return split_ways_to_segments(gj)
 
 def get_streets_geojson():
     cached_bbox = ''
@@ -380,6 +261,7 @@ def get_streets_geojson():
         except Exception:
             pass
 
+    # Invalidate cache when bbox or segmentation version changes
     cache_stale = cached_bbox != DEFAULT_BBOX
     if not cache_stale and os.path.exists(CACHE_PATH):
         try:
@@ -395,8 +277,7 @@ def get_streets_geojson():
 
     if not os.path.exists(CACHE_PATH):
         data = fetch_from_overpass(DEFAULT_BBOX)
-        addr_data = fetch_addresses_from_overpass(DEFAULT_BBOX)
-        gj = overpass_to_geojson(data, addr_data)
+        gj   = overpass_to_geojson(data)
         gj['cache_version'] = CACHE_VERSION
         with open(CACHE_PATH, 'w') as f:
             json.dump(gj, f)
@@ -1090,8 +971,7 @@ async function resetByName(idx) {
 // STATS (TAB 3)
 // ============================================================
 function computeStats() {
-  let doneHouses = 0, plannedHouses = 0, doneSegs = 0, plannedSegs = 0;
-  let doneM = 0, plannedM = 0;
+  let doneM = 0, plannedM = 0, doneSegs = 0, plannedSegs = 0;
   const doneNames = new Set(), plannedNames = new Set();
   for (const f of allFeatures) {
     const st = statuses[f.id] || 'none';
@@ -1103,34 +983,20 @@ function computeStats() {
       const dlon = (c[i+1][0] - c[i][0]) * 111320 * Math.cos((c[i][1] + c[i+1][1]) / 2 * Math.PI / 180);
       m += Math.sqrt(dlat * dlat + dlon * dlon);
     }
-    const houseCount = f.properties.house_count || 0;
-    if (st === 'done') {
-      doneM += m;
-      doneHouses += houseCount;
-      doneSegs++;
-      if (f.properties.name) doneNames.add(f.properties.name);
-    }
-    if (st === 'planned') {
-      plannedM += m;
-      plannedHouses += houseCount;
-      plannedSegs++;
-      if (f.properties.name) plannedNames.add(f.properties.name);
-    }
+    if (st === 'done')    { doneM += m;    doneSegs++;    if (f.properties.name) doneNames.add(f.properties.name); }
+    if (st === 'planned') { plannedM += m; plannedSegs++; if (f.properties.name) plannedNames.add(f.properties.name); }
   }
-  return {
-    doneM, plannedM, doneSegs, plannedSegs, doneHouses, plannedHouses,
-    doneStreets: doneNames.size, plannedStreets: plannedNames.size
-  };
+  return { doneM, plannedM, doneSegs, plannedSegs, doneStreets: doneNames.size, plannedStreets: plannedNames.size };
 }
 
 async function loadStats() {
   const s     = computeStats();
   const total = s.doneSegs + s.plannedSegs;
   const pct   = total > 0 ? Math.round(s.doneSegs / total * 100) : 0;
+  const houses = Math.round(s.doneM * 0.05 / 5) * 5;
   const km     = (s.doneM / 1000).toFixed(1);
-  const houses = s.doneHouses;
 
-  document.getElementById('st-houses').textContent   = houses > 0 ? houses : '–';
+  document.getElementById('st-houses').textContent   = houses > 0 ? '~' + houses : '–';
   document.getElementById('st-km-lbl').textContent   = s.doneM > 0 ? km + ' km geflyerd' : 'Nog niks gedaan';
   document.getElementById('st-pct').textContent      = pct + '%';
   document.getElementById('st-bar').style.width      = pct + '%';
